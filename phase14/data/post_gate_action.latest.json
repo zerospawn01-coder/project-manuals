@@ -1,0 +1,14 @@
+{
+  "generated_at": "2026-03-20T15:05:22Z",
+  "watcher_run_id": "watcher-20260320T150522Z-267813300",
+  "required_action": "wait_for_baseline_completion",
+  "runbook_step_id": "RUNBOOK-PENDING-01",
+  "owner_canonical": "operations_analyst",
+  "next_step": "RUNBOOK-PENDING-01: Wait for baseline completion and rerun watcher",
+  "evidence_paths": [
+    "C:\\Users\\zeros\\.gemini\\antigravity\\scratch\\project_manuals\\phase14\\data\\dispatch_audit_metrics.latest.json",
+    "C:\\Users\\zeros\\.gemini\\antigravity\\scratch\\project_manuals\\phase14\\data\\candidate_snapshot.csv",
+    "C:\\Users\\zeros\\.gemini\\antigravity\\scratch\\project_manuals\\phase14\\data\\review_queue.csv",
+    "C:\\Users\\zeros\\.gemini\\antigravity\\scratch\\project_manuals\\phase14\\docs\\WEEK2_REPORT_TEMPLATE.md"
+  ]
+}

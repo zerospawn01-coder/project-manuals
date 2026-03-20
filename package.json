@@ -1,0 +1,46 @@
+{
+  "name": "antigravity-phase-1",
+  "version": "0.1.0",
+  "description": "Antigravity Phase 1: Genesis - Contract + Hub Integrity System",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc",
+    "workflow:validate": "node -e \"const path=require('node:path'); const root=(process.env.INIT_CWD || process.cwd()).replace(/^\\\\\\\\\\?\\\\/, ''); process.chdir(root); require(path.join(root,'node_modules','ts-node','register')); require(path.join(root,'tools','workflow_runtime','stateMachineValidatorCli.ts'));\"",
+    "workflow:event:validate": "node -e \"const path=require('node:path'); const root=(process.env.INIT_CWD || process.cwd()).replace(/^\\\\\\\\\\?\\\\/, ''); process.chdir(root); require(path.join(root,'node_modules','ts-node','register')); require(path.join(root,'tools','workflow_runtime','validateEventCli.ts'));\" -- --event workflows/samples/valid_workflow_event.v0.1.json",
+    "workflow:event:validate:orchestrator": "node -e \"const path=require('node:path'); const root=(process.env.INIT_CWD || process.cwd()).replace(/^\\\\\\\\\\?\\\\/, ''); process.chdir(root); require(path.join(root,'node_modules','ts-node','register')); require(path.join(root,'tools','workflow_runtime','validateEventCli.ts'));\" -- --event workflows/samples/valid_dynamic_prompt_dispatch_event.v0.1.json",
+    "workflow:event:validate:orchestrator:invalid": "node -e \"const path=require('node:path'); const root=(process.env.INIT_CWD || process.cwd()).replace(/^\\\\\\\\\\?\\\\/, ''); process.chdir(root); require(path.join(root,'node_modules','ts-node','register')); require(path.join(root,'tools','workflow_runtime','validateEventCli.ts'));\" -- --event workflows/samples/invalid_dynamic_prompt_dispatch_event_missing_correlation.v0.1.json",
+    "mcp:repo-split": "node -e \"const path=require('node:path'); const root=(process.env.INIT_CWD || process.cwd()).replace(/^\\\\\\\\\\?\\\\/, ''); require(path.join(root,'tools','repo_split_mcp','launch.js'));\"",
+    "workflow:dispatch:audit:telemetry": "node -e \"const path=require('node:path'); const root=(process.env.INIT_CWD || process.cwd()).replace(/^\\\\\\\\\\?\\\\/, ''); process.chdir(root); require(path.join(root,'node_modules','ts-node','register')); require(path.join(root,'tools','workflow_runtime','dispatchAuditTelemetryCli.ts'));\" -- --out phase14/data/dispatch_audit_metrics.latest.json",
+    "mcp:repo-split:smoke": "node -e \"const path=require('node:path'); const root=(process.env.INIT_CWD || process.cwd()).replace(/^\\\\\\\\\\?\\\\/, ''); process.chdir(root); require(path.join(root,'node_modules','ts-node','register')); require(path.join(root,'tools','repo_split_mcp','smokeTest.ts'));\"",
+    "test": "tsc && node dist/tests/tamper_test.js",
+    "test:gate": "tsc && node dist/tests/transaction_gate.test.js",
+    "proof-pack": "tsc && node dist/tools/generate_proof_pack.js",
+    "simulator": "npx ts-node contract/rollback_simulator.ts",
+    "clean": "rm -rf dist"
+  },
+  "keywords": [
+    "antigravity",
+    "phase-1",
+    "contract",
+    "proof",
+    "hash-chain",
+    "append-only-log"
+  ],
+  "author": "",
+  "license": "MIT",
+  "devDependencies": {
+    "@types/node": "^20.19.33",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.9.3"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.27.1",
+    "ajv": "^8.18.0",
+    "ajv-formats": "^3.0.1",
+    "yaml": "^2.8.2",
+    "zod": "^4.3.6"
+  }
+}

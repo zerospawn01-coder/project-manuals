@@ -1,0 +1,729 @@
+version: "0.1"
+workflow_family: "operational_governance_stack"
+
+common:
+  state_enum:
+    - PENDING
+    - RUNNING
+    - PASS
+    - FAIL
+    - INCOMPLETE
+    - DEGRADED
+    - BLOCKED
+    - ESCALATED
+
+  error_codes:
+    - DATA_INCOMPLETE
+    - REVIEW_QUEUE_INVALID
+    - GATE_EVIDENCE_MISMATCH
+    - BASELINE_DRIFT_AMBIGUOUS
+    - POLICY_BLOCKED
+    - ROUTE_UNSUPPORTED
+    - TOOL_CAPABILITY_MISMATCH
+    - APPROVAL_REQUIRED
+    - APPROVAL_DENIED
+    - RECOVERY_UNVERIFIED
+    - RETRY_BUDGET_EXCEEDED
+    - DEPENDENCY_UNAVAILABLE
+    - CONFIG_MISMATCH
+    - PROCESS_STALLED
+    - HARD_DOWN
+
+  event_keys:
+    required:
+      - trace_id
+      - correlation_id
+      - run_id
+      - workflow_id
+      - stage_id
+      - week_id
+    notes:
+      trace_id: "Cross-workflow end-to-end trace key"
+      correlation_id: "Same incident/request correlation key"
+      run_id: "Single execution attempt identifier"
+
+  idempotency:
+    key_template: "{week_id}:{stage_id}:{run_id}"
+    policy:
+      on_duplicate: "reject_or_return_existing_result"
+      on_retry_same_run_id: "must_not_duplicate_side_effects"
+      on_retry_new_run_id: "allowed_if_prior_state_not_terminal_or_explicit_override"
+
+  roles:
+    operator:
+      can:
+        - start_workflow
+        - review_outputs
+        - request_escalation
+    reviewer:
+      can:
+        - approve_review_stage
+        - reject_review_stage
+        - annotate_evidence
+    approver:
+      can:
+        - approve_destructive_or_high_risk_actions
+        - approve_gate_override
+    incident_commander:
+      can:
+        - declare_service_incident
+        - authorize_manual_recovery
+        - stop_auto_recovery
+    admin:
+      can:
+        - change_policy
+        - change_baseline
+        - force_reset
+        - override_all_with_audit
+
+  timing_defaults:
+    sla:
+      weekly_ops_report_due_hours: 24
+      policy_routing_due_minutes: 15
+      hub_recovery_first_response_minutes: 5
+    timeout:
+      discovery_minutes: 30
+      review_stage_minutes: 240
+      gate_stage_minutes: 60
+      report_stage_minutes: 60
+      policy_classification_minutes: 10
+      dispatch_minutes: 10
+      hub_recovery_action_minutes: 15
+      recovery_verification_minutes: 10
+    retry_budget:
+      default_attempts: 3
+      hub_recovery_attempts: 3
+    cooldown_window:
+      hub_recovery_minutes: 30
+      repeated_restart_block_minutes: 60
+
+relationships:
+  parent_workflow: "phase14_weekly_ops"
+  middleware_workflow: "dynamic_prompt_orchestrator"
+  service_workflow: "hub_monitoring_recovery"
+  topology:
+    - from: "dynamic_prompt_orchestrator"
+      to: "phase14_weekly_ops"
+      relation: "normalizes_and_routes_inputs"
+    - from: "dynamic_prompt_orchestrator"
+      to: "hub_monitoring_recovery"
+      relation: "normalizes_and_routes_service_actions"
+    - from: "hub_monitoring_recovery"
+      to: "phase14_weekly_ops"
+      relation: "supplies_service_health_and_incident_context"
+
+workflows:
+  - id: "phase14_weekly_ops"
+    type: "parent_operational_workflow"
+    title: "Phase14 weekly ops workflow"
+    purpose: "Execute weekly Phase14 operations and prove baseline continuity and HEALTHY streak progression."
+
+    inputs:
+      required:
+        - week_id
+        - baseline_week_id
+        - measurement_window
+        - data_completeness
+        - discovery_output
+        - review_queue
+        - gate_inputs
+        - baseline_metrics
+        - invariant_definitions
+      optional:
+        - prior_week_report
+        - open_issues
+        - manual_annotations
+
+    stages:
+      - id: "weekly_context_initialization"
+        state_flow: [PENDING, RUNNING, PASS, FAIL, INCOMPLETE]
+        inputs:
+          - week_id
+          - baseline_week_id
+          - measurement_window
+          - baseline_metrics
+        outputs:
+          - execution_context
+        decision_points:
+          - id: "context_valid"
+            allowed_states: [PASS, INCOMPLETE, FAIL]
+            evidence_fields:
+              - week_id
+              - baseline_week_id
+              - measurement_window
+              - baseline_reference_found
+              - data_completeness
+            failure_codes:
+              - DATA_INCOMPLETE
+        automation_boundary:
+          automated:
+            - initialize_context
+            - validate_presence_of_required_inputs
+          human_required:
+            - baseline_reference_change
+
+      - id: "discovery"
+        state_flow: [PENDING, RUNNING, PASS, INCOMPLETE, FAIL]
+        inputs:
+          - discovery_output
+          - execution_context
+        outputs:
+          - discovery_candidates
+          - normalized_review_inputs
+        decision_points:
+          - id: "discovery_completeness"
+            allowed_states: [PASS, INCOMPLETE]
+            evidence_fields:
+              - candidate_count
+              - source_count
+              - data_completeness
+              - missing_sources
+            failure_codes:
+              - DATA_INCOMPLETE
+        automation_boundary:
+          automated:
+            - collect_candidates
+            - normalize_inputs
+          human_required: []
+
+      - id: "review"
+        state_flow: [PENDING, RUNNING, PASS, FAIL, ESCALATED]
+        inputs:
+          - review_queue
+          - discovery_candidates
+        outputs:
+          - reviewed_items
+          - review_decisions
+          - escalations
+        decision_points:
+          - id: "review_readiness"
+            allowed_states: [PASS, FAIL, ESCALATED]
+            evidence_fields:
+              - review_queue_initialized
+              - priority_score_present
+              - queue_order_valid
+              - reviewer_assigned
+            failure_codes:
+              - REVIEW_QUEUE_INVALID
+          - id: "review_completion"
+            allowed_states: [PASS, ESCALATED]
+            evidence_fields:
+              - reviewed_count
+              - remaining_count
+              - escalated_count
+              - reviewer_signoff
+            failure_codes:
+              - APPROVAL_REQUIRED
+        automation_boundary:
+          automated:
+            - initialize_review_queue
+            - score_and_sort_candidates
+          human_required:
+            - approve_review_stage
+            - escalate_ambiguous_items
+
+      - id: "gate"
+        state_flow: [PENDING, RUNNING, PASS, FAIL, DEGRADED]
+        inputs:
+          - review_decisions
+          - baseline_metrics
+          - invariant_definitions
+        outputs:
+          - gate_decision
+          - invariant_continuity_status
+          - healthy_streak_transition
+        decision_points:
+          - id: "gate_pass_fail_pending"
+            allowed_states: [PASS, FAIL, DEGRADED]
+            evidence_fields:
+              - median_cycle_time
+              - queue_age_p50
+              - queue_age_p90
+              - invariants_i1_to_i6
+              - baseline_delta
+              - data_completeness
+            failure_codes:
+              - GATE_EVIDENCE_MISMATCH
+              - BASELINE_DRIFT_AMBIGUOUS
+          - id: "healthy_streak_transition"
+            allowed_states: [PASS, DEGRADED]
+            evidence_fields:
+              - prior_streak_state
+              - current_gate_decision
+              - continuity_status
+              - streak_count
+            failure_codes:
+              - BASELINE_DRIFT_AMBIGUOUS
+        automation_boundary:
+          automated:
+            - compute_metric_deltas
+            - evaluate_invariants
+            - calculate_streak_state
+          human_required:
+            - approve_gate_override
+            - approve_healthy_streak_final_recognition
+
+      - id: "report"
+        state_flow: [PENDING, RUNNING, PASS, FAIL]
+        inputs:
+          - gate_decision
+          - reviewed_items
+          - open_issues
+        outputs:
+          - weekly_report
+          - weekly_assessment
+          - next_actions
+        decision_points:
+          - id: "report_complete"
+            allowed_states: [PASS, FAIL]
+            evidence_fields:
+              - report_generated
+              - assessment_generated
+              - unresolved_issue_count
+              - report_signoff
+            failure_codes:
+              - DATA_INCOMPLETE
+        automation_boundary:
+          automated:
+            - draft_report
+            - compile_assessment
+          human_required:
+            - final_report_signoff
+
+      - id: "baseline_monitoring"
+        state_flow: [PENDING, RUNNING, PASS, DEGRADED, FAIL]
+        inputs:
+          - baseline_metrics
+          - gate_decision
+          - healthy_streak_transition
+        outputs:
+          - baseline_monitoring_snapshot
+        decision_points:
+          - id: "baseline_continuity"
+            allowed_states: [PASS, DEGRADED, FAIL]
+            evidence_fields:
+              - baseline_reference_week
+              - continuity_result
+              - metric_drift_summary
+              - invariant_continuity_status
+            failure_codes:
+              - BASELINE_DRIFT_AMBIGUOUS
+        automation_boundary:
+          automated:
+            - update_monitoring_snapshot
+          human_required:
+            - change_baseline_definition
+
+    outputs:
+      required:
+        - weekly_assessment
+        - weekly_report
+        - gate_decision
+        - baseline_monitoring_snapshot
+        - healthy_streak_transition
+        - next_actions
+
+    failure_handling:
+      DATA_INCOMPLETE:
+        action: "mark_workflow_incomplete_and_stop_before_gate"
+      REVIEW_QUEUE_INVALID:
+        action: "fail_closed_and_regenerate_review_queue"
+      GATE_EVIDENCE_MISMATCH:
+        action: "fail_closed_and_require_manual_review"
+      BASELINE_DRIFT_AMBIGUOUS:
+        action: "degrade_to_pending_or_degraded_without_pass"
+
+  - id: "dynamic_prompt_orchestrator"
+    type: "policy_middleware_workflow"
+    title: "Dynamic Prompt Orchestrator"
+    purpose: "Normalize, classify, route, and govern requests before execution."
+
+    inputs:
+      required:
+        - raw_task_request
+        - operator_intent
+        - policy_set
+        - environment_context
+        - destination_workflow_metadata
+      optional:
+        - risk_classification_rules
+        - tool_capabilities
+        - escalation_policy
+
+    stages:
+      - id: "intake_normalization"
+        state_flow: [PENDING, RUNNING, PASS, BLOCKED, ESCALATED]
+        inputs:
+          - raw_task_request
+          - operator_intent
+        outputs:
+          - normalized_request
+        decision_points:
+          - id: "intent_sufficiently_specified"
+            allowed_states: [PASS, ESCALATED, BLOCKED]
+            evidence_fields:
+              - intent_fields_present
+              - ambiguity_score
+              - missing_parameters
+              - normalization_actions
+            failure_codes:
+              - APPROVAL_REQUIRED
+        automation_boundary:
+          automated:
+            - normalize_request
+            - detect_ambiguity
+          human_required:
+            - resolve_high_ambiguity_cases
+
+      - id: "policy_classification"
+        state_flow: [PENDING, RUNNING, PASS, BLOCKED, ESCALATED]
+        inputs:
+          - normalized_request
+          - policy_set
+        outputs:
+          - policy_class
+          - policy_reasons
+        decision_points:
+          - id: "policy_allowed"
+            allowed_states: [PASS, BLOCKED, ESCALATED]
+            evidence_fields:
+              - policy_class
+              - matched_rules
+              - risk_level
+              - blocked_reason
+            failure_codes:
+              - POLICY_BLOCKED
+        automation_boundary:
+          automated:
+            - classify_policy
+          human_required:
+            - override_policy_block
+
+      - id: "routing"
+        state_flow: [PENDING, RUNNING, PASS, FAIL, ESCALATED]
+        inputs:
+          - normalized_request
+          - destination_workflow_metadata
+        outputs:
+          - routing_decision
+        decision_points:
+          - id: "target_workflow_determinable"
+            allowed_states: [PASS, FAIL, ESCALATED]
+            evidence_fields:
+              - candidate_workflows
+              - selected_workflow
+              - route_conflicts
+              - capability_match
+            failure_codes:
+              - ROUTE_UNSUPPORTED
+              - TOOL_CAPABILITY_MISMATCH
+        automation_boundary:
+          automated:
+            - resolve_route
+          human_required:
+            - resolve_multi_workflow_conflicts
+
+      - id: "prompt_shaping"
+        state_flow: [PENDING, RUNNING, PASS, FAIL]
+        inputs:
+          - normalized_request
+          - routing_decision
+        outputs:
+          - normalized_task_payload
+        decision_points:
+          - id: "payload_valid_for_target"
+            allowed_states: [PASS, FAIL]
+            evidence_fields:
+              - target_workflow
+              - required_fields_satisfied
+              - dropped_fields
+              - transformed_fields
+            failure_codes:
+              - TOOL_CAPABILITY_MISMATCH
+        automation_boundary:
+          automated:
+            - shape_payload
+          human_required: []
+
+      - id: "approval_escalation"
+        state_flow: [PENDING, RUNNING, PASS, BLOCKED, ESCALATED]
+        inputs:
+          - normalized_task_payload
+          - policy_class
+        outputs:
+          - approval_status
+          - escalation_record
+        decision_points:
+          - id: "human_approval_required"
+            allowed_states: [PASS, BLOCKED, ESCALATED]
+            evidence_fields:
+              - risk_level
+              - destructive_flag
+              - external_effect_flag
+              - approver_role
+            failure_codes:
+              - APPROVAL_REQUIRED
+              - APPROVAL_DENIED
+        automation_boundary:
+          automated:
+            - determine_approval_requirement
+          human_required:
+            - approve_destructive_or_high_risk_actions
+
+      - id: "dispatch"
+        state_flow: [PENDING, RUNNING, PASS, FAIL]
+        inputs:
+          - normalized_task_payload
+          - approval_status
+          - routing_decision
+        outputs:
+          - dispatch_record
+        decision_points:
+          - id: "dispatch_successful"
+            allowed_states: [PASS, FAIL]
+            evidence_fields:
+              - target_workflow
+              - dispatch_timestamp
+              - payload_hash
+              - approval_status
+            failure_codes:
+              - ROUTE_UNSUPPORTED
+        automation_boundary:
+          automated:
+            - dispatch_payload
+            - write_dispatch_record
+          human_required: []
+
+    outputs:
+      required:
+        - normalized_task_payload
+        - policy_class
+        - routing_decision
+        - approval_status
+        - dispatch_record
+
+    failure_handling:
+      POLICY_BLOCKED:
+        action: "block_execution_and_emit_reason_code"
+      ROUTE_UNSUPPORTED:
+        action: "stop_dispatch_and_return_routing_failure"
+      TOOL_CAPABILITY_MISMATCH:
+        action: "fail_closed_or_downgrade_to_safe_non-executing_mode"
+      APPROVAL_REQUIRED:
+        action: "escalate_to_human_approver"
+      APPROVAL_DENIED:
+        action: "terminate_request_with_audit_record"
+
+  - id: "hub_monitoring_recovery"
+    type: "service_workflow"
+    title: "Hub monitoring and recovery"
+    purpose: "Monitor hub service health, classify faults, recover safely, and verify recovery."
+
+    inputs:
+      required:
+        - health_signals
+        - process_status
+        - heartbeat
+        - queue_depth
+        - error_rate
+        - dependency_availability
+        - restart_policy
+        - recovery_runbook
+      optional:
+        - prior_incidents
+        - config_version
+        - operator_annotations
+
+    stages:
+      - id: "baseline_health_capture"
+        state_flow: [PENDING, RUNNING, PASS, FAIL]
+        inputs:
+          - health_signals
+          - process_status
+        outputs:
+          - health_baseline
+        decision_points:
+          - id: "baseline_available"
+            allowed_states: [PASS, FAIL]
+            evidence_fields:
+              - heartbeat_baseline
+              - queue_baseline
+              - error_rate_baseline
+              - baseline_timestamp
+            failure_codes:
+              - DATA_INCOMPLETE
+        automation_boundary:
+          automated:
+            - capture_baseline
+          human_required: []
+
+      - id: "monitoring"
+        state_flow: [PENDING, RUNNING, PASS, DEGRADED, FAIL]
+        inputs:
+          - health_baseline
+          - health_signals
+          - process_status
+        outputs:
+          - health_snapshot
+          - anomaly_candidates
+        decision_points:
+          - id: "healthy_vs_degraded_vs_failed"
+            allowed_states: [PASS, DEGRADED, FAIL]
+            evidence_fields:
+              - heartbeat_status
+              - queue_depth
+              - error_rate
+              - dependency_availability
+            failure_codes:
+              - PROCESS_STALLED
+              - HARD_DOWN
+              - DEPENDENCY_UNAVAILABLE
+        automation_boundary:
+          automated:
+            - poll_health
+            - compare_against_baseline
+          human_required: []
+
+      - id: "detection"
+        state_flow: [PENDING, RUNNING, PASS, DEGRADED, FAIL]
+        inputs:
+          - anomaly_candidates
+        outputs:
+          - incident_classification
+        decision_points:
+          - id: "incident_classified"
+            allowed_states: [PASS, DEGRADED, FAIL]
+            evidence_fields:
+              - incident_type
+              - severity
+              - repeated_occurrence
+              - affected_dependencies
+            failure_codes:
+              - PROCESS_STALLED
+              - HARD_DOWN
+              - DEPENDENCY_UNAVAILABLE
+        automation_boundary:
+          automated:
+            - classify_incident
+          human_required: []
+
+      - id: "diagnosis"
+        state_flow: [PENDING, RUNNING, PASS, ESCALATED]
+        inputs:
+          - incident_classification
+          - process_status
+          - dependency_availability
+        outputs:
+          - diagnosis_result
+        decision_points:
+          - id: "root_cause_hypothesis_ready"
+            allowed_states: [PASS, ESCALATED]
+            evidence_fields:
+              - process_alive
+              - queue_jam_detected
+              - upstream_status
+              - config_version_match
+            failure_codes:
+              - CONFIG_MISMATCH
+              - DEPENDENCY_UNAVAILABLE
+        automation_boundary:
+          automated:
+            - diagnose_fault_class
+          human_required:
+            - inspect_ambiguous_root_cause
+
+      - id: "recovery_action"
+        state_flow: [PENDING, RUNNING, PASS, FAIL, ESCALATED]
+        inputs:
+          - diagnosis_result
+          - recovery_runbook
+          - restart_policy
+        outputs:
+          - recovery_action_record
+        decision_points:
+          - id: "recoverable_automatically"
+            allowed_states: [PASS, ESCALATED, FAIL]
+            evidence_fields:
+              - recovery_strategy
+              - retry_count
+              - retry_budget
+              - cooldown_window
+            failure_codes:
+              - RETRY_BUDGET_EXCEEDED
+          - id: "retry_or_isolate"
+            allowed_states: [PASS, ESCALATED, FAIL]
+            evidence_fields:
+              - repeated_restart_count
+              - isolation_triggered
+              - cooldown_active
+              - dependency_health
+            failure_codes:
+              - RETRY_BUDGET_EXCEEDED
+              - DEPENDENCY_UNAVAILABLE
+        automation_boundary:
+          automated:
+            - soft_restart
+            - reconnect_dependency
+            - apply_backoff
+            - isolate_service
+          human_required:
+            - authorize_manual_recovery_after_auto_stop
+
+      - id: "verification"
+        state_flow: [PENDING, RUNNING, PASS, FAIL, ESCALATED]
+        inputs:
+          - recovery_action_record
+          - health_snapshot
+        outputs:
+          - recovery_status
+          - escalation_event
+        decision_points:
+          - id: "recovery_verified"
+            allowed_states: [PASS, FAIL, ESCALATED]
+            evidence_fields:
+              - heartbeat_restored
+              - queue_normalized
+              - error_rate_normalized
+              - verification_window_elapsed
+            failure_codes:
+              - RECOVERY_UNVERIFIED
+        automation_boundary:
+          automated:
+            - verify_post_recovery_health
+            - emit_incident_record
+          human_required:
+            - declare_manual_takeover_after_failed_verification
+
+    outputs:
+      required:
+        - health_snapshot
+        - incident_classification
+        - diagnosis_result
+        - recovery_action_record
+        - recovery_status
+
+    failure_handling:
+      PROCESS_STALLED:
+        action: "attempt_soft_recovery_then_verify"
+      HARD_DOWN:
+        action: "mark_failed_attempt_immediate_recovery_or_escalate"
+      DEPENDENCY_UNAVAILABLE:
+        action: "avoid_restart_loop_and_backoff_or_isolate"
+      CONFIG_MISMATCH:
+        action: "block_unsafe_recovery_and_escalate"
+      RETRY_BUDGET_EXCEEDED:
+        action: "stop_auto_recovery_and_isolate_then_escalate"
+      RECOVERY_UNVERIFIED:
+        action: "mark_recovery_failed_and_transfer_to_manual_path"
+
+    stop_conditions:
+      auto_recovery_stop_if:
+        - "retry_count >= retry_budget"
+        - "repeated_restart_failures_within_cooldown_window"
+        - "dependency_unavailable_persists_beyond_cooldown_window"
+        - "config_mismatch_detected"
+        - "verification_failed_after_last_allowed_attempt"
+      manual_handoff_required_if:
+        - "incident_commander_declares_manual_takeover"
+        - "service_isolated"
+        - "recovery_status == ESCALATED"

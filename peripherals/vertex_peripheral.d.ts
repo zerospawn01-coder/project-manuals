@@ -1,0 +1,1 @@
+export * from '../dist/peripherals/vertex_peripheral';

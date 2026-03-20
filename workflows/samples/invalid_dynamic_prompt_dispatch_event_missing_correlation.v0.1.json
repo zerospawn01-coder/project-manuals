@@ -1,0 +1,25 @@
+{
+  "event_id": "evt-dpo-002",
+  "event_type": "dispatch_recorded",
+  "timestamp": "2026-03-20T00:00:00.000Z",
+  "trace_id": "trace-dpo-002",
+  "run_id": "run-dpo-002",
+  "workflow_id": "dynamic_prompt_orchestrator",
+  "stage_id": "dispatch",
+  "week_id": "2026-W12",
+  "state": "PASS",
+  "severity": "info",
+  "actor": {
+    "role": "system",
+    "id": "dynamic_prompt_orchestrator"
+  },
+  "evidence": {
+    "normalized_intent": "delete_user"
+  },
+  "payload": {
+    "allowed_outputs": [
+      "DENY"
+    ]
+  },
+  "idempotency_key": "2026-W12:dispatch:run-dpo-002"
+}

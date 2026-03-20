@@ -1,0 +1,156 @@
+version: "0.1"
+matrix_id: "operational_governance_approval_matrix"
+source_workflow_definition: "operational_governance_stack.v0.1.yaml"
+
+default_policy:
+  fail_closed: true
+  require_audit_for_override: true
+  require_actor_identity: true
+
+roles:
+  - operator
+  - reviewer
+  - approver
+  - incident_commander
+  - admin
+
+actions:
+  - id: start_workflow
+    min_role: operator
+    requires_approval: false
+
+  - id: approve_review_stage
+    min_role: reviewer
+    requires_approval: false
+
+  - id: reject_review_stage
+    min_role: reviewer
+    requires_approval: false
+
+  - id: annotate_evidence
+    min_role: reviewer
+    requires_approval: false
+
+  - id: approve_destructive_or_high_risk_actions
+    min_role: approver
+    requires_approval: true
+
+  - id: approve_gate_override
+    min_role: approver
+    requires_approval: true
+
+  - id: declare_service_incident
+    min_role: incident_commander
+    requires_approval: false
+
+  - id: authorize_manual_recovery
+    min_role: incident_commander
+    requires_approval: true
+
+  - id: stop_auto_recovery
+    min_role: incident_commander
+    requires_approval: true
+
+  - id: change_policy
+    min_role: admin
+    requires_approval: true
+
+  - id: change_baseline
+    min_role: admin
+    requires_approval: true
+
+  - id: force_reset
+    min_role: admin
+    requires_approval: true
+
+  - id: override_all_with_audit
+    min_role: admin
+    requires_approval: true
+
+workflow_action_bindings:
+  phase14_weekly_ops:
+    review:
+      required_actions:
+        - approve_review_stage
+        - reject_review_stage
+        - annotate_evidence
+      restricted_actions:
+        - change_baseline
+    gate:
+      required_actions:
+        - approve_gate_override
+      restricted_actions:
+        - override_all_with_audit
+    baseline_monitoring:
+      required_actions:
+        - change_baseline
+
+  dynamic_prompt_orchestrator:
+    approval_escalation:
+      required_actions:
+        - approve_destructive_or_high_risk_actions
+      restricted_actions:
+        - change_policy
+    dispatch:
+      required_actions:
+        - start_workflow
+
+  hub_monitoring_recovery:
+    recovery_action:
+      required_actions:
+        - authorize_manual_recovery
+        - stop_auto_recovery
+    verification:
+      required_actions:
+        - declare_service_incident
+
+approval_rules:
+  - id: HIGH_RISK_REQUIRES_APPROVER
+    when:
+      risk_level_in: [high, critical]
+      destructive_flag: true
+    require:
+      role: approver
+      audit_fields:
+        - approver_id
+        - approval_timestamp
+        - approval_reason
+
+  - id: GATE_OVERRIDE_REQUIRES_APPROVER
+    when:
+      workflow_id: phase14_weekly_ops
+      stage_id: gate
+      override_requested: true
+    require:
+      role: approver
+      audit_fields:
+        - approver_id
+        - gate_evidence_reference
+        - override_reason
+
+  - id: AUTO_RECOVERY_STOP_REQUIRES_INCIDENT_COMMANDER
+    when:
+      workflow_id: hub_monitoring_recovery
+      stage_id: recovery_action
+      action: stop_auto_recovery
+    require:
+      role: incident_commander
+      audit_fields:
+        - incident_id
+        - stop_reason
+
+  - id: POLICY_CHANGE_REQUIRES_ADMIN
+    when:
+      action: change_policy
+    require:
+      role: admin
+      audit_fields:
+        - admin_id
+        - change_ticket
+        - change_reason
+
+rejection_codes:
+  insufficient_role: APPROVAL_DENIED
+  missing_approval: APPROVAL_REQUIRED
+  missing_audit_fields: APPROVAL_DENIED
+  action_not_bound: POLICY_BLOCKED

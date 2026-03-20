@@ -1,0 +1,150 @@
+version: "0.1"
+validator_id: "operational_governance_state_machine"
+source_workflow_definition: "operational_governance_stack.v0.1.yaml"
+
+policy:
+  fail_closed: true
+  allow_unknown_state: false
+  require_state_flow_declared_per_stage: true
+  require_decision_points_per_stage: true
+
+global:
+  allowed_states:
+    - PENDING
+    - RUNNING
+    - PASS
+    - FAIL
+    - INCOMPLETE
+    - DEGRADED
+    - BLOCKED
+    - ESCALATED
+
+  stage_start_state: PENDING
+
+  terminal_states:
+    - PASS
+    - FAIL
+    - INCOMPLETE
+    - DEGRADED
+    - BLOCKED
+    - ESCALATED
+
+  legal_common_transitions:
+    - from: PENDING
+      to: RUNNING
+    - from: RUNNING
+      to: PASS
+    - from: RUNNING
+      to: FAIL
+    - from: RUNNING
+      to: INCOMPLETE
+    - from: RUNNING
+      to: DEGRADED
+    - from: RUNNING
+      to: BLOCKED
+    - from: RUNNING
+      to: ESCALATED
+
+  prohibited_common_transitions:
+    - from: PENDING
+      to: PASS
+    - from: PENDING
+      to: FAIL
+    - from: PENDING
+      to: INCOMPLETE
+    - from: PENDING
+      to: DEGRADED
+    - from: PENDING
+      to: BLOCKED
+    - from: PENDING
+      to: ESCALATED
+
+checks:
+  - id: STAGE_FLOW_ONLY_USES_ALLOWED_STATES
+    severity: error
+    rule: "each stage.state_flow must be subset of global.allowed_states"
+
+  - id: STAGE_FLOW_STARTS_WITH_PENDING
+    severity: error
+    rule: "each stage.state_flow[0] must be PENDING"
+
+  - id: STAGE_FLOW_CONTAINS_RUNNING
+    severity: error
+    rule: "each stage.state_flow must include RUNNING"
+
+  - id: DECISION_ALLOWED_STATES_SUBSET_OF_STAGE_FLOW
+    severity: error
+    rule: "each decision_points.allowed_states must be subset of stage.state_flow"
+
+  - id: DECISION_HAS_FAILURE_CODES
+    severity: error
+    rule: "each decision point must declare failure_codes"
+
+  - id: DECISION_HAS_EVIDENCE_FIELDS
+    severity: error
+    rule: "each decision point must declare evidence_fields"
+
+  - id: STAGE_OUTPUTS_DECLARED
+    severity: warning
+    rule: "each stage should declare at least one output"
+
+  - id: WORKFLOW_REQUIRED_OUTPUTS_NON_EMPTY
+    severity: error
+    rule: "workflow.outputs.required must be non-empty"
+
+workflow_specific_constraints:
+  phase14_weekly_ops:
+    required_stage_order:
+      - weekly_context_initialization
+      - discovery
+      - review
+      - gate
+      - report
+      - baseline_monitoring
+    stage_requirements:
+      gate:
+        must_allow_states:
+          - PASS
+          - FAIL
+          - DEGRADED
+
+  dynamic_prompt_orchestrator:
+    required_stage_order:
+      - intake_normalization
+      - policy_classification
+      - routing
+      - prompt_shaping
+      - approval_escalation
+      - dispatch
+    stage_requirements:
+      approval_escalation:
+        must_allow_states:
+          - BLOCKED
+          - ESCALATED
+
+  hub_monitoring_recovery:
+    required_stage_order:
+      - baseline_health_capture
+      - monitoring
+      - detection
+      - diagnosis
+      - recovery_action
+      - verification
+    stage_requirements:
+      verification:
+        must_allow_states:
+          - PASS
+          - FAIL
+          - ESCALATED
+
+outputs:
+  on_success:
+    - validation_report
+    - transition_graph
+  on_failure:
+    - validation_report
+    - violation_list
+
+violation_levels:
+  error: "validation_failed"
+  warning: "validation_passed_with_warnings"

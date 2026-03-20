@@ -1,0 +1,56 @@
+name: Workflow Governance Validation
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+      - phase14-readiness-gate
+    paths:
+      - "workflows/**"
+      - "tools/workflow_runtime/**"
+      - "contract/**"
+      - "package.json"
+      - "package-lock.json"
+      - ".github/workflows/workflow-governance-validation.yml"
+  pull_request:
+    paths:
+      - "workflows/**"
+      - "tools/workflow_runtime/**"
+      - "contract/**"
+      - "package.json"
+      - "package-lock.json"
+      - ".github/workflows/workflow-governance-validation.yml"
+
+jobs:
+  validate-workflow-contracts:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Validate workflow definition
+        run: npm run workflow:validate
+
+      - name: Validate sample workflow event
+        run: npm run workflow:event:validate
+
+      - name: Validate orchestrator dispatch sample event
+        run: npm run workflow:event:validate:orchestrator
+
+      - name: Assert invalid orchestrator dispatch sample is rejected
+        run: |
+          if npm run workflow:event:validate:orchestrator:invalid; then
+            echo "Expected invalid sample to fail schema validation, but it passed."
+            exit 1
+          fi
+          echo "Invalid orchestrator dispatch sample rejected as expected."

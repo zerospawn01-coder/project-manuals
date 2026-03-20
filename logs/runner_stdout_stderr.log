@@ -1,0 +1,18 @@
+
+============================================================
+PHASE F-2: Multi-Node Long-Run Test
+============================================================
+Duration:     4.0 hours
+Log file:     lattice_f2.jsonl
+Log level:    STANDARD
+Rotation:     100MB or 1.0h
+============================================================
+
+[LOG] File: lattice_f2.jsonl (rotation #0)
+[START] 3-node lattice
+   Duration: 4.0 hours
+   Log level: STANDARD
+   Log interval: 30s
+============================================================
+C:\Users\zeros\.gemini\antigravity\scratch\project_manuals\run_lattice_f2.py:206: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+  "timestamp": datetime.utcnow().isoformat() + 'Z',

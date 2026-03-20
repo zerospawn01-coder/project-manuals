@@ -1,0 +1,35 @@
+{
+  "event_id": "evt-dpo-001",
+  "event_type": "dispatch_recorded",
+  "timestamp": "2026-03-20T00:00:00.000Z",
+  "trace_id": "trace-dpo-001",
+  "correlation_id": "corr-dpo-001",
+  "run_id": "run-dpo-001",
+  "workflow_id": "dynamic_prompt_orchestrator",
+  "stage_id": "dispatch",
+  "week_id": "2026-W12",
+  "state": "PASS",
+  "severity": "info",
+  "actor": {
+    "role": "system",
+    "id": "dynamic_prompt_orchestrator"
+  },
+  "evidence": {
+    "normalized_intent": "delete_user",
+    "operation_signature": "DELETE /api/users/:id",
+    "blast_radius": "TENANT",
+    "risk_level": "high",
+    "filtered_trace_count": 4,
+    "injected_capsule_count": 2
+  },
+  "payload": {
+    "allowed_outputs": [
+      "TRANSITION_REQUEST",
+      "REQUEST_EVIDENCE",
+      "ESCALATE_HLG",
+      "DENY",
+      "CONDITIONAL_APPROVAL"
+    ]
+  },
+  "idempotency_key": "2026-W12:dispatch:run-dpo-001"
+}

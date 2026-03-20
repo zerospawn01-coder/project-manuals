@@ -1,0 +1,12 @@
+{
+  "baseline_input_state": "INCOMPLETE",
+  "reason": "review_completion_time missing for the observation window",
+  "measurement_window": "2026-03-10T00:00:00 -> 2026-03-12T23:59:59",
+  "sample_size": 0,
+  "queue_sample_size": 100,
+  "data_completeness": 0.6666666666666666,
+  "median_cycle_time": null,
+  "queue_age_p50": 67.96587022305556,
+  "queue_age_p90": 67.96587071372221,
+  "cycle_time_basis": "created_at -> review_completion_time"
+}

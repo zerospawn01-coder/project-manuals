@@ -1,0 +1,23 @@
+{
+  "generated_at": "2026-03-20T15:05:22.284415+00:00",
+  "latest_watcher_run_id": "watcher-20260320T150522Z-267813300",
+  "latest_record_generated_at": "2026-03-20T15:05:22Z",
+  "source_audit_path": "C:\\Users\\zeros\\.gemini\\antigravity\\scratch\\project_manuals\\phase14\\data\\post_gate_action.audit.jsonl",
+  "total_records": 10,
+  "parse_error_count": 0,
+  "counts_by_runbook_step_id": {
+    "RUNBOOK-PENDING-01": 10
+  },
+  "counts_by_owner_canonical": {
+    "operations_analyst": 10
+  },
+  "counts_by_required_action": {
+    "wait_for_baseline_completion": 10
+  },
+  "counts_by_weekly_gate_status": {
+    "PENDING_BASELINE": 10
+  },
+  "counts_by_dispatch_governance_signal": {
+    "ok": 10
+  }
+}

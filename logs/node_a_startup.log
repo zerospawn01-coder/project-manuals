@@ -1,0 +1,5 @@
+[Node A] Listening on http://localhost:8001
+[Node A] Events: GET /api/logs
+[Node A] 笨・Generated E0: 81e5e1be (node_seq=0)
+[Node A] 笨・Generated C_a: 2160b90f (node_seq=1)
+[Node A] Ready. Waiting for Council Aggregator...

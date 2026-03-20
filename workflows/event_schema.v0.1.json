@@ -1,0 +1,207 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "operational_governance_stack.event_schema.v0.1",
+  "title": "Operational Governance Stack Event Schema v0.1",
+  "description": "Common event schema for phase14_weekly_ops, dynamic_prompt_orchestrator, and hub_monitoring_recovery.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "event_id",
+    "event_type",
+    "timestamp",
+    "trace_id",
+    "correlation_id",
+    "run_id",
+    "workflow_id",
+    "stage_id",
+    "week_id",
+    "state",
+    "severity",
+    "actor",
+    "evidence",
+    "payload"
+  ],
+  "properties": {
+    "event_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "event_type": {
+      "type": "string",
+      "enum": [
+        "stage_started",
+        "stage_completed",
+        "decision_evaluated",
+        "approval_requested",
+        "approval_granted",
+        "approval_denied",
+        "dispatch_recorded",
+        "incident_detected",
+        "recovery_attempted",
+        "recovery_verified",
+        "escalation_opened",
+        "escalation_closed"
+      ]
+    },
+    "timestamp": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "trace_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "correlation_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "run_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "workflow_id": {
+      "type": "string",
+      "enum": [
+        "phase14_weekly_ops",
+        "dynamic_prompt_orchestrator",
+        "hub_monitoring_recovery"
+      ]
+    },
+    "stage_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "week_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "state": {
+      "type": "string",
+      "enum": [
+        "PENDING",
+        "RUNNING",
+        "PASS",
+        "FAIL",
+        "INCOMPLETE",
+        "DEGRADED",
+        "BLOCKED",
+        "ESCALATED"
+      ]
+    },
+    "severity": {
+      "type": "string",
+      "enum": [
+        "info",
+        "warning",
+        "error",
+        "critical"
+      ]
+    },
+    "error_code": {
+      "type": "string",
+      "enum": [
+        "DATA_INCOMPLETE",
+        "REVIEW_QUEUE_INVALID",
+        "GATE_EVIDENCE_MISMATCH",
+        "BASELINE_DRIFT_AMBIGUOUS",
+        "POLICY_BLOCKED",
+        "ROUTE_UNSUPPORTED",
+        "TOOL_CAPABILITY_MISMATCH",
+        "APPROVAL_REQUIRED",
+        "APPROVAL_DENIED",
+        "RECOVERY_UNVERIFIED",
+        "RETRY_BUDGET_EXCEEDED",
+        "DEPENDENCY_UNAVAILABLE",
+        "CONFIG_MISMATCH",
+        "PROCESS_STALLED",
+        "HARD_DOWN"
+      ]
+    },
+    "actor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "role",
+        "id"
+      ],
+      "properties": {
+        "role": {
+          "type": "string",
+          "enum": [
+            "operator",
+            "reviewer",
+            "approver",
+            "incident_commander",
+            "admin",
+            "system"
+          ]
+        },
+        "id": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "evidence": {
+      "type": "object",
+      "description": "Decision evidence fields collected at the stage decision point.",
+      "additionalProperties": true
+    },
+    "payload": {
+      "type": "object",
+      "description": "Stage-specific event payload.",
+      "additionalProperties": true
+    },
+    "idempotency_key": {
+      "type": "string",
+      "pattern": "^[^:]+:[^:]+:[^:]+$",
+      "description": "Expected format: {week_id}:{stage_id}:{run_id}"
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "state": {
+            "const": "FAIL"
+          }
+        },
+        "required": [
+          "state"
+        ]
+      },
+      "then": {
+        "required": [
+          "error_code"
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "event_type": {
+            "const": "approval_granted"
+          }
+        },
+        "required": [
+          "event_type"
+        ]
+      },
+      "then": {
+        "properties": {
+          "actor": {
+            "properties": {
+              "role": {
+                "enum": [
+                  "approver",
+                  "incident_commander",
+                  "admin"
+                ]
+              }
+            }
+          }
+        }
+      }
+    }
+  ]
+}

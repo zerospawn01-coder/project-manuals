@@ -1,0 +1,13 @@
+{
+  "generated_at": "2026-03-20T08:36:02.441Z",
+  "source_log_path": "C:\\Users\\zeros\\.gemini\\antigravity\\scratch\\project_manuals\\logs\\dynamic_prompt_orchestrator.dispatch.audit.jsonl",
+  "line_count": 0,
+  "parsed_line_count": 0,
+  "parse_error_count": 0,
+  "validation_failure_count": 0,
+  "missing_required_context_count": 0,
+  "dispatch_ready_count": 0,
+  "dispatch_ready_rate": 0,
+  "failures_by_week": {},
+  "failures_by_run": {}
+}

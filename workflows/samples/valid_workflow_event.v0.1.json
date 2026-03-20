@@ -1,0 +1,26 @@
+{
+  "event_id": "evt-001",
+  "event_type": "stage_completed",
+  "timestamp": "2026-03-15T00:00:00.000Z",
+  "trace_id": "trace-abc",
+  "correlation_id": "corr-xyz",
+  "run_id": "run-001",
+  "workflow_id": "phase14_weekly_ops",
+  "stage_id": "gate",
+  "week_id": "2026-W11",
+  "state": "PASS",
+  "severity": "info",
+  "actor": {
+    "role": "system",
+    "id": "validator-cli"
+  },
+  "evidence": {
+    "median_cycle_time": 18,
+    "queue_age_p50": 4,
+    "queue_age_p90": 11
+  },
+  "payload": {
+    "gate_decision": "PASS"
+  },
+  "idempotency_key": "2026-W11:gate:run-001"
+}
