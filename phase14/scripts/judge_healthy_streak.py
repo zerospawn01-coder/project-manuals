@@ -38,6 +38,7 @@ class WeekEvaluation:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Judge HEALTHY streak and L3 readiness.")
     parser.add_argument("--input-file", required=True, help="Path to weekly input JSON")
+    parser.add_argument("--history-file", help="Path to history JSON (to maintain streaks across runs)")
     parser.add_argument("--output", help="Optional path to write result JSON")
     parser.add_argument("--json", action="store_true", help="Print JSON only")
     return parser.parse_args()
@@ -252,12 +253,15 @@ def evaluate_l3_readiness(last_four: list[WeekEvaluation], current: WeekEvaluati
     return "ELIGIBLE", []
 
 
-def run(payload: dict[str, Any]) -> dict[str, Any]:
+def run(payload: dict[str, Any], history_evals: list[WeekEvaluation] | None = None) -> dict[str, Any]:
     weeks = ensure_week_list(payload)
 
     evaluations: list[WeekEvaluation] = []
-    previous_status: str | None = None
-    previous_streak = 0
+    if history_evals:
+        evaluations.extend(history_evals)
+
+    previous_status: str | None = evaluations[-1].week_status if evaluations else None
+    previous_streak = evaluations[-1].healthy_streak_count if evaluations else 0
 
     for week in weeks:
         evaluated = evaluate_week(week, previous_status, previous_streak)
@@ -300,7 +304,29 @@ def run(payload: dict[str, Any]) -> dict[str, Any]:
 def main() -> None:
     args = parse_args()
     payload = json.loads(Path(args.input_file).read_text(encoding="utf-8"))
-    result = run(payload)
+
+    history_evals: list[WeekEvaluation] = []
+    if args.history_file and Path(args.history_file).exists():
+        h_data = json.loads(Path(args.history_file).read_text(encoding="utf-8"))
+        # Load from 'evaluated_weeks' array in history result
+        if "evaluated_weeks" in h_data:
+            for hw in h_data["evaluated_weeks"]:
+                history_evals.append(WeekEvaluation(
+                    week_id=hw["week_id"],
+                    week_status=hw["week_status"],
+                    bands={}, # Minimal for history
+                    invariant_continuity=hw["invariant_continuity"],
+                    healthy_streak_count=hw["healthy_streak_count"],
+                    l3_readiness="UNKNOWN",
+                    fail_reasons=[],
+                    next_action="UNKNOWN",
+                    gate_freeze_occurred=hw["gate_freeze_occurred"],
+                    median_cycle_time=None, # Minimal for history
+                    queue_age_p50=None,
+                    queue_age_p90=None
+                ))
+
+    result = run(payload, history_evals=history_evals)
 
     result_text = json.dumps(result, ensure_ascii=True, indent=2)
     if args.output:
