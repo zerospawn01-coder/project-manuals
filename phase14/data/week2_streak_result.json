@@ -1,0 +1,27 @@
+{
+  "week_id": "2026-W11",
+  "week_status": "HEALTHY",
+  "bands": {
+    "median_cycle_time_band": "stable",
+    "queue_age_p50_band": "stable",
+    "queue_age_p90_band": "stable"
+  },
+  "invariant_continuity": "PASS",
+  "healthy_streak_count": 1,
+  "streak_window": "2026-W11",
+  "l3_readiness": "NOT_ELIGIBLE",
+  "fail_reasons": [
+    "healthy_streak_below_4",
+    "insufficient_weeks_for_l3_window"
+  ],
+  "next_action": "continue_weekly_tracking",
+  "evaluated_weeks": [
+    {
+      "week_id": "2026-W11",
+      "week_status": "HEALTHY",
+      "invariant_continuity": "PASS",
+      "healthy_streak_count": 1,
+      "gate_freeze_occurred": false
+    }
+  ]
+}

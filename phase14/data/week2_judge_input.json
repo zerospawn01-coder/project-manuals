@@ -1,0 +1,17 @@
+{
+  "week_id": "2026-W11",
+  "measurement_window": "2026-03-10T00:00:00 -> 2026-03-12T23:59:59",
+  "data_completeness": 1.0,
+  "median_cycle_time": 9.750006562360973,
+  "queue_age_p50": 15.46614785875,
+  "queue_age_p90": 15.466148272833335,
+  "gate_freeze_occurred": false,
+  "invariants": {
+    "I1_velocity_bound": "PASS",
+    "I2_latency_bound": "PASS",
+    "I3_observability_integrity": "PASS",
+    "I4_state_visibility": "PASS",
+    "I5_human_authority": "PASS",
+    "I6_oscillation_guard": "PASS"
+  }
+}
