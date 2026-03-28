@@ -1,45 +1,38 @@
 # Project Manuals
 
-**Antigravity OS - Global Governance & Operational Runbooks**
-
-Version: 1.0.0  
-License: Propriertary
-
----
-
-## Overview
-
-This repository serves as the single source of truth for Antigravity OS governance, architecture specifications, and operational runbooks. It provides the necessary contracts and playbooks for managing the self-evolving AI ecosystem.
+`project-manuals` is the operational knowledge repository for reusable workflows, governance notes, runbooks, checklists, and split or migration procedures across the Antigravity ecosystem. Its purpose is not just to store documents, but to preserve executable operational knowledge that can be reused as playbooks, validation flows, and coordination assets.
 
 ## Scope
 
-- **Primary**: Canonical documentation, protocol specifications (MAP, SVP), and system-wide playbooks.
-- **Secondary**: Tooling for repository management, split execution, and CI/CD orchestration.
+- Primary: runbooks, workflow specs, governance notes, checklists, and operator-facing tooling.
+- Includes: reusable manual assets, workflow validators, repo split procedures, and phase-specific operations guidance.
+- Excludes: mainline research code, standalone product implementation, and prototype-heavy experiment work.
 
-## Promotion Rules
+## What Belongs Here
 
-- **Draft**: Documentation updates must be reviewed by at least one Lead Architect.
-- **Canonical**: Protocol changes require a 72-hour review period and consensus from the Core Research Group.
+- Documents that are meant to be reused operationally.
+- Workflow contracts and validation tooling.
+- Governance and migration procedures that coordinate other repositories.
 
-## Run Commands
+## What Does Not Belong Here
 
-- **Validate Plan**: `pwsh -File .\tools\repo_split_plan.ps1 -Layout recommended`
-- **Audit Logs**: `cat antigravity.log`
+- Core cognitive research implementation.
+- Independent project code that needs its own delivery boundary.
+- Early experiments whose main value is exploration rather than repeatable procedure.
 
-## Ownership
+## Validation
 
-- **Lead**: @zerospawn01-coder (Chief Architect)
-- **Support**: Antigravity OS Governance Board
+- `npm run build`
+- `npm test`
+- `npm run test:gate`
+- `npm run workflow:validate`
+- `npm run workflow:event:validate`
+- `npm run workflow:event:validate:orchestrator`
+- `npm run workflow:event:validate:orchestrator:invalid`
+- `npm run mcp:repo-split:smoke`
 
----
+## Positioning
 
-## Technical Index
-
-- **Foundational Protocols**: [REPO_SPLIT_MCP_V0_1_SPEC.md](REPO_SPLIT_MCP_V0_1_SPEC.md)
-- **Deployment Runbooks**: [REPO_SPLIT_POWERSHELL_RUNBOOK.md](REPO_SPLIT_POWERSHELL_RUNBOOK.md)
-- **Execution Playbooks**: [SPLIT_EXECUTION_PLAYBOOK.md](SPLIT_EXECUTION_PLAYBOOK.md)
-
-## Status
-
-**Current Status**: Stable (v1.0.0)  
-**Security**: Publicly readable, Write-access restricted to Governance Board.
+- Role: workflow and operational knowledge repository
+- Maintenance level: ongoing, but biased toward reusable procedure rather than feature growth
+- Success condition: a future operator can run the documented process without reconstructing hidden context
