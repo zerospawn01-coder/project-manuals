@@ -16,7 +16,19 @@ function normalizeWindowsPath(value: string): string {
 }
 
 function repoRoot(): string {
-  return normalizeWindowsPath(path.resolve(__dirname, '..', '..'));
+  const candidates = [
+    normalizeWindowsPath(process.cwd()),
+    normalizeWindowsPath(path.resolve(__dirname, '..', '..')),
+    normalizeWindowsPath(path.resolve(__dirname, '..', '..', '..')),
+  ];
+
+  for (const candidate of candidates) {
+    if (fs.existsSync(path.join(candidate, 'workflows', 'event_schema.v0.1.json'))) {
+      return candidate;
+    }
+  }
+
+  return candidates[0];
 }
 
 function defaultSchemaPath(): string {

@@ -6,19 +6,16 @@
     "esModuleInterop": true,
     "strict": false,
     "skipLibCheck": true,
-    "baseUrl": "."
+    "baseUrl": ".",
+    "outDir": "dist",
+    "rootDir": "."
   },
   "include": [
     "contract/**/*.ts",
     "contract/**/*.d.ts",
-    "core/**/*.ts",
-    "hub/**/*.ts",
-    "hub/**/*.d.ts",
-    "peripherals/**/*.d.ts",
     "tools/**/*.ts",
     "types/**/*.d.ts",
-    "renderer-react/src/**/*.ts",
-    "renderer-react/src/**/*.tsx"
+    "tests/**/*.ts"
   ],
   "exclude": [
     "dist",
