@@ -8,17 +8,23 @@
 - Includes: reusable manual assets, workflow validators, repo split procedures, and phase-specific operations guidance.
 - Excludes: mainline research code, standalone product implementation, and prototype-heavy experiment work.
 
-## What Belongs Here
+## Non-goals
 
-- Documents that are meant to be reused operationally.
-- Workflow contracts and validation tooling.
-- Governance and migration procedures that coordinate other repositories.
+- Acting as a generic archive for documentation with no operational reuse value.
+- Becoming the default home for core product or research implementation.
+- Hiding repo-specific behavior that should live closer to the code it governs.
 
-## What Does Not Belong Here
+## Inputs
 
-- Core cognitive research implementation.
-- Independent project code that needs its own delivery boundary.
-- Early experiments whose main value is exploration rather than repeatable procedure.
+- Reusable runbooks, checklists, and workflow specifications.
+- Governance notes and migration procedures that coordinate multiple repositories.
+- Validation tooling whose main purpose is to support repeatable operations.
+
+## Outputs
+
+- Operator-facing procedures that can be executed without rediscovering hidden context.
+- Validation paths that enforce workflow and governance assumptions.
+- Shared knowledge assets that other repositories can reference instead of re-explaining locally.
 
 ## Validation
 
@@ -31,8 +37,8 @@
 - `npm run workflow:event:validate:orchestrator:invalid`
 - `npm run mcp:repo-split:smoke`
 
-## Positioning
+## Promotion Path
 
-- Role: workflow and operational knowledge repository
-- Maintenance level: ongoing, but biased toward reusable procedure rather than feature growth
-- Success condition: a future operator can run the documented process without reconstructing hidden context
+- Inbound: reusable procedures and workflow contracts extracted from active repositories.
+- Outbound: code-heavy implementations should move back into the repository that owns the runtime.
+- Repository role: workflow and operational knowledge repository with ongoing maintenance biased toward repeatable procedure.
