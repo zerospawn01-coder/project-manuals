@@ -34,8 +34,8 @@ already exist.
 | `geodesic_descent/` | `lab-experiments` | Move as-is | Completed | Experimental incubation asset. |
 | `personal_ai/` | `lab-experiments` | Move as-is | Completed | Personal/prototype work stays in the experiment repo, not the main line. |
 | `project_manuals/` | `project-manuals` | Move as-is | Completed | Operational knowledge and handoff material. |
-| `autonomous-task-gen/` | `scratch` or future dedicated repo | Hold | Deferred | Not part of the current split set; evaluate independently before moving. |
-| `data/` | Per owning repo or local-only | Split selectively | Deferred | Only move files that are true repo assets; keep machine-local data out of GitHub. |
+| `autonomous-task-gen/` | Future dedicated repo | Split out as independent project | Decided | `hackathon-package` is large enough to justify its own lifecycle instead of remaining a scratch leftover. |
+| `data/` | Local-only until provenance is fixed | Keep out of GitHub by default | Decided | `theoretical_predictions.npz` looks like generated numeric output and should not move until a generating workflow and owner repo are explicit. |
 | `.github/` | Per destination repo | Recreate selectively | Completed/Selective | CI and templates were recreated in destination repos rather than copied wholesale. |
 | `.pytest_cache/` | None | Do not move | N/A | Local test residue. |
 | `.git/` | None | Do not move | N/A | Repository metadata, not content. |
@@ -86,12 +86,15 @@ Do not treat these as pending split work:
 
 ## Remaining Decisions
 
-These items are still outside the completed split and need a separate decision
-rather than silent migration:
+These items still require follow-through, but they should no longer be treated
+as unresolved ownership questions:
 
 - `autonomous-task-gen/`
+  - create a dedicated repository when ready
 - `data/`
+  - keep local-only unless a reproducible generating workflow and owning repo are defined
 - any new top-level directory added to `scratch` after the split
+  - evaluate immediately instead of letting it become a silent leftover
 
 ## Working Rule Going Forward
 

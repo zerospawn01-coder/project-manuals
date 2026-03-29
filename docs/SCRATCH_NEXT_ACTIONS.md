@@ -31,11 +31,11 @@ history.
 - Confirm LEAP analysis stays under `cognitive-lab/leap_analysis/`.
 - Confirm `cognitive-lab` CI still covers the three active test surfaces.
 
-### 3. Resolve the only remaining split decisions explicitly
+### 3. Execute the remaining split decisions explicitly
 
-- Decide what to do with `autonomous-task-gen/`.
-- Decide what to do with `data/`.
-- Record both decisions in `project-manuals` so they do not remain silent leftovers.
+- Treat `autonomous-task-gen/` as the next dedicated repo candidate rather than a permanent scratch subdirectory.
+- Keep `data/` local-only unless a reproducible generating workflow and owning repo are defined.
+- Record follow-through work in `project-manuals` so neither item remains a silent leftover.
 
 ## Working Rule
 

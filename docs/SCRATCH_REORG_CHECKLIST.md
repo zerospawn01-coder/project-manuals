@@ -59,15 +59,9 @@ Use this checklist together with `SCRATCH_REPO_MIGRATION_MAP.md`.
 
 ## Phase 5: Resolve Deferred Items Explicitly
 
-- [ ] Decide whether `autonomous-task-gen/` becomes:
-  - its own repo
-  - part of an existing repo
-  - archived/local-only
-- [ ] Decide whether `data/` contains:
-  - maintained repo assets
-  - machine-local inputs
-  - generated outputs that should stay out of GitHub
-- [ ] Record both decisions in `project-manuals` once made.
+- [ ] Treat `autonomous-task-gen/` as a future dedicated repo, not as a permanent `scratch` resident.
+- [ ] Keep `data/` local-only unless a reproducible generator and owner repo are recorded.
+- [ ] Record both follow-through actions in `project-manuals`.
 
 ## Phase 6: Clean the Legacy Root
 
