@@ -50,13 +50,13 @@ already exist.
 | `test_leap_analysis.py` | `cognitive-lab/leap_analysis/` | Move and regroup | Completed | Regression coverage for LEAP analysis. |
 | `LEAP_ANALYSIS_README.md` | `cognitive-lab/leap_analysis/README.md` | Move and rename | Completed | README normalized inside the subdirectory. |
 | `CI_CD_SETUP.md` | `cognitive-lab` | Move or absorb | Completed | Became part of the main repo setup/documentation. |
-| `CODE_QUALITY_REVIEW.md` | `cognitive-lab/leap_analysis/docs/reports/` | Move | Completed | Report belongs with the LEAP analysis workstream. |
-| `CRITICAL_EVALUATION_REPORT.md` | `cognitive-lab/leap_analysis/docs/reports/` | Move | Completed | Report belongs with the LEAP analysis workstream. |
-| `FINAL_UNIT_TEST_REPORT.md` | `cognitive-lab/leap_analysis/docs/reports/` | Move | Completed | Report belongs with the LEAP analysis workstream. |
-| `PUBLICATION_READINESS_REPORT.md` | `cognitive-lab/leap_analysis/docs/reports/` | Move | Completed | Report belongs with the LEAP analysis workstream. |
-| `UNIT_TEST_IMPLEMENTATION_REPORT.md` | `cognitive-lab/leap_analysis/docs/reports/` | Move | Completed | Report belongs with the LEAP analysis workstream. |
-| `FINAL_WORK_SUMMARY.md` | `cognitive-lab/leap_analysis/docs/archive/` | Move | Completed | Historical summary, retained as archive rather than active docs. |
-| `TODAY_WORK_SUMMARY.md` | `cognitive-lab/leap_analysis/docs/archive/` | Move | Completed | Historical summary, retained as archive rather than active docs. |
+| `CODE_QUALITY_REVIEW.md` | `cognitive-lab/docs/reports/` | Move | Completed | Report belongs with the LEAP analysis workstream but follows the existing split automation path. |
+| `CRITICAL_EVALUATION_REPORT.md` | `cognitive-lab/docs/reports/` | Move | Completed | Report belongs with the LEAP analysis workstream but follows the existing split automation path. |
+| `FINAL_UNIT_TEST_REPORT.md` | `cognitive-lab/docs/reports/` | Move | Completed | Report belongs with the LEAP analysis workstream but follows the existing split automation path. |
+| `PUBLICATION_READINESS_REPORT.md` | `cognitive-lab/docs/reports/` | Move | Completed | Report belongs with the LEAP analysis workstream but follows the existing split automation path. |
+| `UNIT_TEST_IMPLEMENTATION_REPORT.md` | `cognitive-lab/docs/reports/` | Move | Completed | Report belongs with the LEAP analysis workstream but follows the existing split automation path. |
+| `FINAL_WORK_SUMMARY.md` | `cognitive-lab/docs/archive/` | Move | Completed | Historical summary, retained as archive rather than active docs. |
+| `TODAY_WORK_SUMMARY.md` | `cognitive-lab/docs/archive/` | Move | Completed | Historical summary, retained as archive rather than active docs. |
 | `README.md` | None | Replace with split guidance if needed | Deferred | The old root README should not be treated as a source-of-truth repo after the split. |
 | `duplicates_画像.csv` | `project-manuals/docs/` or local-only | Evaluate | Deferred | Move only if it is a reusable split artifact; otherwise keep out of Git. |
 | `empty_dirs_画像.txt` | `project-manuals/docs/` or local-only | Evaluate | Deferred | Same rule as other local housekeeping outputs. |
