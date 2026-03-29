@@ -40,6 +40,7 @@ Use this checklist together with `SCRATCH_REPO_MIGRATION_MAP.md`.
 
 ## Phase 3: Confirm Independent Repos Stay Independent
 
+- [ ] State explicitly that the authoritative source for each split repo is its `main` branch, not `scratch`.
 - [ ] Verify `ea-aol` is not referenced as a subproject to be reabsorbed into `scratch`.
 - [ ] Verify `mtp-weaver` is not referenced as a subproject to be reabsorbed into `scratch`.
 - [ ] Verify `project-manuals` remains the destination for:
