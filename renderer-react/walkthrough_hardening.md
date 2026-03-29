@@ -1,5 +1,8 @@
 # Hardening Report & Submission Narrative
 
+> [!NOTE]
+> The `renderer-react` assets in this repository are retained as demo/reference UI components that support operational walkthroughs and review flows. They are not treated as a standalone production application boundary inside `project-manuals`.
+
 ## 1. Adversarial Patch Replay Results
 
 The core state logic was stress-tested against four network failure scenarios to ensure "Physical Irreversibility" and state consistency.
