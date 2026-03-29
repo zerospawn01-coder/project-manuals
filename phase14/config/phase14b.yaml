@@ -1,0 +1,42 @@
+version: 1
+
+candidate_explosion:
+  weekly_limit: 100
+  candidate_limit_per_run: 50
+  cluster_size_min: 15
+  adjust:
+    support_min_delta: 5
+    confidence_min_delta: 0.02
+    lift_min_delta: 0.05
+
+reviewer_bias:
+  approval_rate_min: 0.30
+  approval_rate_max: 0.70
+  agreement_rate_min: 0.80
+  golden_candidate_set_size_min: 10
+  golden_candidate_set_size_max: 20
+
+golden_check:
+  accuracy_min: 0.80
+  false_approve_rate_max: 0.15
+  false_reject_rate_max: 0.15
+
+rule_drift:
+  override_rate_max: 0.08
+  accuracy_drop_max: 0.05
+  lifecycle:
+    - candidate
+    - approved
+    - active
+    - degraded
+    - retired
+
+phase14b_readiness:
+  candidate_explosion_rate_max: 100
+  review_agreement_rate_min: 0.80
+  rule_drift_rate_max: 0.05
+  review_throughput_min_per_hour: 80
+
+promotion_governance:
+  rejection_rate_max: 0.30
+  novel_case_ratio_max: 0.15

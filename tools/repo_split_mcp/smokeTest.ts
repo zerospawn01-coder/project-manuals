@@ -31,6 +31,15 @@ function parseToolPayload(result: unknown) {
   return JSON.parse(textItem.text);
 }
 
+function parseToolText(result: unknown): string {
+  const toolResult = result as { content?: Array<{ type?: string; text?: string }> };
+  const textItem = toolResult.content?.find(
+    (entry): entry is TextContentItem => entry.type === 'text' && typeof entry.text === 'string'
+  );
+  assert(textItem, 'Expected text content in tool response');
+  return textItem.text;
+}
+
 async function main() {
   const repoRoot = getRepoRoot();
   const launchPath = path.join(repoRoot, 'tools', 'repo_split_mcp', 'launch.js');
@@ -84,6 +93,28 @@ async function main() {
         planHash: plan.planHash,
       },
     });
+    if (previewResult.isError) {
+      const previewError = parseToolText(previewResult);
+      assert.match(
+        previewError,
+        /missing required source paths|Copy preflight failed/i,
+        `Expected fail-closed preview error, got: ${previewError}`
+      );
+
+      const summary = {
+        tools: toolNames,
+        staticResources,
+        resourceTemplates,
+        planArtifactId: plan.artifactId,
+        previewStatus: 'fail_closed',
+        previewError,
+        stderr: stderrChunks.join('').trim() || null,
+      };
+
+      console.log(JSON.stringify(summary, null, 2));
+      return;
+    }
+
     const preview = parseToolPayload(previewResult) as { artifactId: string; phase: string; status: string };
 
     const confirmationResult = await client.callTool({

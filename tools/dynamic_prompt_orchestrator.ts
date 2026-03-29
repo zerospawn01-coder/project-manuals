@@ -60,7 +60,7 @@ export interface DispatchValidationEvidence {
   audit_log_path: string;
 }
 
-interface DispatchAuditLine {
+interface DispatchAuditLine extends Record<string, unknown> {
   timestamp: string;
   validator: 'event_schema.v0.1.json';
   workflow_id: 'dynamic_prompt_orchestrator';

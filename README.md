@@ -1,45 +1,44 @@
 # Project Manuals
 
-**Antigravity OS - Global Governance & Operational Runbooks**
-
-Version: 1.0.0  
-License: Propriertary
-
----
-
-## Overview
-
-This repository serves as the single source of truth for Antigravity OS governance, architecture specifications, and operational runbooks. It provides the necessary contracts and playbooks for managing the self-evolving AI ecosystem.
+`project-manuals` is the operational knowledge repository for reusable workflows, governance notes, runbooks, checklists, and split or migration procedures across the Antigravity ecosystem. Its purpose is not just to store documents, but to preserve executable operational knowledge that can be reused as playbooks, validation flows, and coordination assets.
 
 ## Scope
 
-- **Primary**: Canonical documentation, protocol specifications (MAP, SVP), and system-wide playbooks.
-- **Secondary**: Tooling for repository management, split execution, and CI/CD orchestration.
+- Primary: runbooks, workflow specs, governance notes, checklists, and operator-facing tooling.
+- Includes: reusable manual assets, workflow validators, repo split procedures, and phase-specific operations guidance.
+- Excludes: mainline research code, standalone product implementation, and prototype-heavy experiment work.
 
-## Promotion Rules
+## Non-goals
 
-- **Draft**: Documentation updates must be reviewed by at least one Lead Architect.
-- **Canonical**: Protocol changes require a 72-hour review period and consensus from the Core Research Group.
+- Acting as a generic archive for documentation with no operational reuse value.
+- Becoming the default home for core product or research implementation.
+- Hiding repo-specific behavior that should live closer to the code it governs.
 
-## Run Commands
+## Inputs
 
-- **Validate Plan**: `pwsh -File .\tools\repo_split_plan.ps1 -Layout recommended`
-- **Audit Logs**: `cat antigravity.log`
+- Reusable runbooks, checklists, and workflow specifications.
+- Governance notes and migration procedures that coordinate multiple repositories.
+- Validation tooling whose main purpose is to support repeatable operations.
 
-## Ownership
+## Outputs
 
-- **Lead**: @zerospawn01-coder (Chief Architect)
-- **Support**: Antigravity OS Governance Board
+- Operator-facing procedures that can be executed without rediscovering hidden context.
+- Validation paths that enforce workflow and governance assumptions.
+- Shared knowledge assets that other repositories can reference instead of re-explaining locally.
 
----
+## Validation
 
-## Technical Index
+- `npm run build`
+- `npm test`
+- `npm run test:gate`
+- `npm run workflow:validate`
+- `npm run workflow:event:validate`
+- `npm run workflow:event:validate:orchestrator`
+- `npm run workflow:event:validate:orchestrator:invalid`
+- `npm run mcp:repo-split:smoke`
 
-- **Foundational Protocols**: [REPO_SPLIT_MCP_V0_1_SPEC.md](REPO_SPLIT_MCP_V0_1_SPEC.md)
-- **Deployment Runbooks**: [REPO_SPLIT_POWERSHELL_RUNBOOK.md](REPO_SPLIT_POWERSHELL_RUNBOOK.md)
-- **Execution Playbooks**: [SPLIT_EXECUTION_PLAYBOOK.md](SPLIT_EXECUTION_PLAYBOOK.md)
+## Promotion Path
 
-## Status
-
-**Current Status**: Stable (v1.0.0)  
-**Security**: Publicly readable, Write-access restricted to Governance Board.
+- Inbound: reusable procedures and workflow contracts extracted from active repositories.
+- Outbound: code-heavy implementations should move back into the repository that owns the runtime.
+- Repository role: workflow and operational knowledge repository with ongoing maintenance biased toward repeatable procedure.
