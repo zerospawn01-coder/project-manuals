@@ -1,0 +1,9 @@
+dist/
+node_modules/
+*.js.map
+
+# Live Fire 実行結果 — 大量の JSON を含むためコミット対象外
+phase14/data/live_fire_runs/
+
+# 環境変数（APIキー等） — 絶対にコミットしない
+.env

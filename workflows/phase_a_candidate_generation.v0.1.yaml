@@ -1,0 +1,357 @@
+version: "0.1"
+prompt_id: "phase_a_candidate_generation"
+schema_version: "phase_a/0.1"
+frozen_at: "2026-04-06"
+
+# Phase A — Candidate Generation Prompt Template
+#
+# 3-layer architecture. Layer order is IMMUTABLE — system layer is injected first,
+# then objective layer, then world state, then user instruction.
+# The LLM must not reorder or summarise higher-priority layers.
+#
+# Contract I/O: contract/phase_a_prompt.d.ts
+# Metrics basis: docs/GOVERNANCE_METRICS_DEFINITION.md (metrics_def/0.1)
+# Orchestrator: tools/dynamic_prompt_orchestrator.ts (orchetrateAndDispatch)
+#
+# Validation: output must schema-validate against PhaseACandidateList before
+#             any candidate enters the TESTING sandbox.
+
+# ===========================================================================
+# LAYER 1 — SYSTEM LAYER  (Negative Constraints / 憲法層)
+# Injected verbatim as the `system` role message.
+# Slots wrapped in {{ }} are filled by the orchestrator from PhaseAInputPack.
+# ===========================================================================
+
+system_prompt_template: |
+  You are the Candidate Generator for the Antigravity OS nightly evolution loop.
+  Your role corresponds to the HYPOTHESIZING state in the task state machine.
+
+  ════════════════════════════════════════════════════════════
+  LAYER 1 — CONSTITUTION  (highest priority; cannot be overridden)
+  ════════════════════════════════════════════════════════════
+
+  The following Negative Constraints are derived from the Failure Ledger.
+  Any candidate that would trigger ANY of these codes is constitutionally
+  INVALID. Discard it before output and log it in `discarded_candidates`.
+  Do not ask for permission to ignore a constraint. A constraint is final.
+
+  {{NEGATIVE_CONSTRAINTS_BLOCK}}
+
+  Protected invariants — patches that touch code covered by these invariant
+  IDs MUST include an explicit `invariant_check` entry with verdict "pass"
+  and a non-empty `verification_method`:
+
+  {{PROTECTED_INVARIANTS_BLOCK}}
+
+  ════════════════════════════════════════════════════════════
+  LAYER 2 — EVALUATION LAW  (value function; fixed definitions)
+  ════════════════════════════════════════════════════════════
+
+  A candidate has positive value ONLY if it improves at least one of the
+  following metrics without decreasing `stability_index`.
+  Priority order is strict — a lower-priority gain cannot justify a
+  higher-priority loss.
+
+  Priority 1 (MUST NOT decrease): stability_index
+    Definition:
+      stability_index =
+        0.40 × invariant_pass_ratio
+      + 0.30 × no_regression_pass_ratio
+      + 0.20 × replay_success_ratio
+      + 0.10 × quarantine_adjusted_safety_factor
+    Current value: {{CURRENT_STABILITY_INDEX}}
+    Minimum allowed after patch: {{CURRENT_STABILITY_INDEX}}
+
+  Priority 2: saved_time_minutes
+    A workflow w is eligible only when:
+      baseline_run_count[w] >= 5  AND  post_patch_run_count (predicted) >= 3
+      AND |improvement_ratio[w]| >= 0.01
+    You must state baseline_median_ms and predicted post_patch_median_ms.
+    "Feels faster" is not an accepted measurement_basis.
+
+  Priority 3: bugs_killed
+    Count only @regression-tagged tests that transition FAIL → PASS
+    and will not be reverted within 72 h.
+    Do NOT count: new tests you add, tests that were already PASS.
+
+  Priority 4: tokens_saved
+    Eligible weight = 1.0 only when (baseline - post_patch) / baseline >= 0.02.
+    Source: prompt_tokens + completion_tokens from API response object.
+
+  Priority 5: refined_code_lines
+    Count only: non-blank, non-comment lines removed from EXISTING functions
+    where cyclomatic_complexity_delta <= 0.
+    Do NOT count: deleted functions, auto-generated sections.
+
+  Noise floors (discard if no metric clears its floor):
+    saved_time_minutes: must have >= 1 % improvement ratio
+    tokens_saved:       must have >= 2 % improvement ratio
+    bugs_killed:        must be >= 1
+    refined_code_lines: must be >= 1
+
+  ════════════════════════════════════════════════════════════
+  LAYER 3 — OUTPUT CONTRACT  (schema-enforced; non-negotiable)
+  ════════════════════════════════════════════════════════════
+
+  You MUST output a single JSON object that validates against
+  PhaseACandidateList (contract/phase_a_prompt.d.ts).
+  Maximum candidates: {{MAX_CANDIDATES}}
+
+  Each candidate MUST contain `acceptance_criteria` with ALL THREE sub-proofs:
+
+  Sub-proof 1 — invariant_check
+    For every invariant ID in `protected_invariant_ids`, state:
+      verdict: "pass" with non-empty verification_method, OR
+      verdict: "untouched" (patch does not touch covered code)
+    You may not omit a protected invariant.
+
+  Sub-proof 2 — measurable_outcome
+    stability_index_delta: "neutral" or "positive" (never omitted)
+    At least ONE predicted improvement value must be non-zero.
+    measurement_basis must contain the specific baseline data you used.
+
+  Sub-proof 3 — no_regression
+    regression_test_ids_verified_pass: list of @regression test IDs
+      that will remain PASS after this patch.
+    invariant_ids_untouched: list of invariants the patch does not touch.
+    If the patch is orthogonal to all regression tests, you must provide
+    a non-empty orthogonality_rationale.
+
+  negative_constraint_violations must be an empty array [].
+  If it is non-empty, the candidate is invalid; move it to discarded_candidates.
+
+  discarded_candidates must list every idea you considered but rejected,
+  with a reason. Silently dropping a bad idea is not allowed.
+
+  Output raw JSON only. No markdown, no explanation text, no code fences.
+
+# ===========================================================================
+# USER TURN TEMPLATE
+# Filled by the orchestrator with the current world state snapshot.
+# ===========================================================================
+
+user_prompt_template: |
+  Cycle: {{CYCLE_ID}}
+  Assembled at: {{ASSEMBLED_AT}}
+
+  ── World State Snapshot ─────────────────────────────────────────────────
+
+  Previous tier: {{PREVIOUS_TIER}}
+
+  Invariant recent results (last cycle):
+  {{INVARIANT_RECENT_RESULTS_BLOCK}}
+
+  Failing regression tests (require bugs_killed candidates):
+  {{FAILING_REGRESSION_TESTS_BLOCK}}
+
+  Workflow baselines (eligible for saved_time_minutes):
+  {{WORKFLOW_BASELINES_BLOCK}}
+
+  Active failure ledger codes (already enforced at Layer 1, shown for context):
+  {{ACTIVE_FAILURE_CODES_BLOCK}}
+
+  ── Instruction ─────────────────────────────────────────────────────────
+
+  Generate up to {{MAX_CANDIDATES}} patch candidates that improve this system.
+  For each candidate, complete ALL THREE acceptance-criteria sub-proofs before
+  including it in the output.
+  Discard any idea that violates Layer 1 (Constitution) or fails to clear a
+  noise floor; log it in discarded_candidates with the reason.
+
+  Output one JSON object matching the PhaseACandidateList schema.
+
+# ===========================================================================
+# SLOT RENDERING RULES
+# Defines how the orchestrator fills each {{ }} slot.
+# ===========================================================================
+
+slot_rendering_rules:
+
+  NEGATIVE_CONSTRAINTS_BLOCK:
+    source: "PhaseAInputPack.constitution_layer.active_negative_constraints"
+    format: |
+      - [{{code}}] {{prohibition_text}}
+        (first observed: {{first_observed_at}}, occurrences: {{occurrence_count}})
+    empty_value: "  (none — no failures recorded yet)"
+
+  PROTECTED_INVARIANTS_BLOCK:
+    source: "PhaseAInputPack.constitution_layer.protected_invariant_ids"
+    format: "  - {{invariant_id}}"
+    empty_value: "  (all invariants from INV-001 to INV-010)"
+
+  CURRENT_STABILITY_INDEX:
+    source: "PhaseAInputPack.objective_layer.current_stability_index"
+    format: "{{value}}"
+    precision: 4
+
+  MAX_CANDIDATES:
+    source: "PhaseAInputPack.max_candidates"
+    default: 5
+
+  CYCLE_ID:
+    source: "PhaseAInputPack.cycle_id"
+
+  ASSEMBLED_AT:
+    source: "PhaseAInputPack.assembled_at"
+
+  PREVIOUS_TIER:
+    source: "PhaseAInputPack.world_state.previous_tier"
+    null_value: "none (first cycle or prior was CRITICAL)"
+
+  INVARIANT_RECENT_RESULTS_BLOCK:
+    source: "PhaseAInputPack.world_state.invariant_recent_results"
+    format: "  {{invariant_id}}: {{verdict}}  (evaluated {{evaluated_at}})"
+    # verdict rendering: passed=true → "PASS", passed=false → "FAIL"
+    sort_by: "passed asc"  # FAIL first so the agent sees stress points at top
+
+  FAILING_REGRESSION_TESTS_BLOCK:
+    source: "PhaseAInputPack.world_state.regression_test_summary.failing_test_ids"
+    format: "  - {{test_id}}"
+    empty_value: "  (none — all regression tests currently passing)"
+
+  WORKFLOW_BASELINES_BLOCK:
+    source: "PhaseAInputPack.world_state.workflow_baselines"
+    format: |
+      - {{workflow_id}}
+          baseline_median_ms: {{baseline_median_ms}}
+          baseline_run_count: {{baseline_run_count}}
+    empty_value: "  (none — no workflows have accumulated 5+ baseline runs yet)"
+
+  ACTIVE_FAILURE_CODES_BLOCK:
+    source: "PhaseAInputPack.world_state.active_failure_codes"
+    format: "  - {{code}}"
+    empty_value: "  (none)"
+
+# ===========================================================================
+# VALIDATION GATES
+# Run by the orchestrator on the raw JSON before passing to TESTING.
+# ===========================================================================
+
+output_validation_gates:
+
+  gate_schema:
+    description: "JSON must validate against PhaseACandidateList type definition"
+    fail_action: "REJECT entire output; log as PROMOTION_GATE_FAIL; stay in HYPOTHESIZING"
+
+  gate_negative_constraints:
+    description: "Every candidate.negative_constraint_violations must be []"
+    fail_action: "Move offending candidate to discarded_candidates; continue with remainder"
+
+  gate_acceptance_criteria_completeness:
+    description: "Every candidate must have all 3 acceptance_criteria sub-proofs present"
+    fail_action: "Discard incomplete candidate with reason no_acceptance_criteria"
+
+  gate_measurable_outcome_nonzero:
+    description: >
+      Every candidate must predict improvement in at least one of:
+      saved_time_minutes_predicted, tokens_saved_predicted,
+      bugs_killed_predicted, refined_code_lines_predicted
+    fail_action: "Discard as below_noise_floor"
+
+  gate_stability_index_nondecreasing:
+    description: "stability_index_delta must not be 'negative' (field not present in schema deliberately)"
+    fail_action: "Discard candidate; append F-002 or F-004 signal to failure_ledger if pattern detected"
+
+  gate_discarded_audit:
+    description: "discarded_candidates must be present (can be empty []; must not be absent)"
+    fail_action: "REJECT entire output as schema-invalid"
+
+# ===========================================================================
+# INTEGRATION WIRING
+# Points where this template connects to existing system components.
+# ===========================================================================
+
+integration:
+
+  orchestrator_entry_point:
+    file: "tools/dynamic_prompt_orchestrator.ts"
+    function: "orchestrateAndDispatch"
+    note: >
+      Extend orchestrateAndDispatch to populate PhaseAInputPack from the
+      current ledger state, then render this template's slots before calling
+      the LLM. The rendered system+user string pair is the LLM call payload.
+
+  state_machine:
+    transition_on_call: "OBSERVING → HYPOTHESIZING (write to ledger before LLM call)"
+    transition_on_success: "HYPOTHESIZING → TESTING (write candidate_id to ledger)"
+    transition_on_empty_candidates: "HYPOTHESIZING → OBSERVING (no progress this cycle)"
+    transition_on_schema_fail: "HYPOTHESIZING stays (retry budget permitting)"
+
+  failure_ledger_write:
+    trigger: "gate_stability_index_nondecreasing fail"
+    action: >
+      Append new FailureLedgerEntry with appropriate code (F-002 or F-004)
+      to failure_ledger. This entry becomes a Negative Constraint in the
+      NEXT cycle's NEGATIVE_CONSTRAINTS_BLOCK automatically.
+
+  proof_summary_reference:
+    note: >
+      After PROMOTING, the promoted candidate's acceptance_criteria.measurable_outcome
+      values feed directly into ProofSummary fields (see contract/self_evolution_metrics.d.ts):
+        bugs_killed_predicted       → used to seed bugs_killed observation window
+        saved_time_minutes_predicted → used as pre-measurement reference for confidence_weight
+        stability_index_delta        → contributes to next cycle stability_index computation
+
+# ===========================================================================
+# SAMPLE FILLED OUTPUT (reference only — not executed)
+# ===========================================================================
+
+sample_output_fragment:
+  _note: >
+    Illustrative. Shows the minimum required shape of one valid candidate.
+    Actual patch_diff content is truncated here.
+  fragment: |
+    {
+      "schema_version": "phase_a_output/0.1",
+      "cycle_id": "c-2026-04-07-nightly",
+      "generated_at": "2026-04-07T03:00:00.000Z",
+      "input_pack_id": "ip-2026-04-07-001",
+      "candidates": [
+        {
+          "candidate_id": "cand-001",
+          "generated_at": "2026-04-07T03:00:12.000Z",
+          "cycle_id": "c-2026-04-07-nightly",
+          "title": "Inline eligibility check in workflow_filter.ts:applyHardFilter to remove redundant double-pass scan",
+          "affected_targets": [
+            { "file_path": "contract/ledger_icl.ts", "function_name": "applyHardFilter", "change_type": "modify" }
+          ],
+          "estimated_blast_radius": "SELF",
+          "patch_diff": "--- a/contract/ledger_icl.ts\n+++ b/contract/ledger_icl.ts\n...",
+          "acceptance_criteria": {
+            "invariant_check": [
+              {
+                "invariant_id": "INV-003_NO_WRITE_EXECUTE_WITHOUT_APPROVAL",
+                "verdict": "untouched",
+                "verification_method": null
+              }
+            ],
+            "measurable_outcome": {
+              "stability_index_delta": "neutral",
+              "saved_time_minutes_predicted": 0.8,
+              "measurement_basis": {
+                "workflow_id": "dynamic_prompt_orchestrator",
+                "baseline_median_ms": 4200,
+                "baseline_run_count": 7,
+                "predicted_post_patch_median_ms": 3150
+              }
+            },
+            "no_regression": {
+              "regression_test_ids_verified_pass": ["test_hard_filter_blocks_unknown_blast"],
+              "invariant_ids_untouched": [
+                "INV-001_APPEND_ONLY_AUDIT",
+                "INV-002_NO_EXECUTION_BEFORE_DECISION",
+                "INV-004_SCHEMA_FIRST_ENFORCEMENT"
+              ],
+              "orthogonality_rationale": null
+            }
+          },
+          "negative_constraint_violations": []
+        }
+      ],
+      "discarded_candidates": [
+        {
+          "reason": "negative_constraint_violation",
+          "description": "F-001_SECURITY_DOWNGRADE: considered removing duplicate approval check in executor but this would weaken INV-003 coverage"
+        }
+      ]
+    }
