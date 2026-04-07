@@ -342,7 +342,8 @@ async function main(): Promise<void> {
   const run_dir = path.join(live_fire_root, ts_label);
   fs.mkdirSync(run_dir, { recursive: true });
 
-  const ledger_dir = path.join(run_dir, 'ledger');
+  // ledger_dir は run をまたいで共有 — 累積カウンタを維持するため
+  const ledger_dir = path.join(PROJECT_ROOT, 'phase14', 'data', 'ledger');
   fs.mkdirSync(ledger_dir, { recursive: true });
 
   console.log(`  run_dir:  ${run_dir}`);
@@ -614,6 +615,13 @@ async function main(): Promise<void> {
 
     llm_dispatcher: dispatcher,
     ledger_store,
+
+    // DriftMonitor を ctx に渡すことで Phase D が drift_metrics を集計できる
+    drift_monitor: (() => {
+      const drift_state_dir = path.join(PROJECT_ROOT, 'phase14', 'data', 'drift_state');
+      fs.mkdirSync(drift_state_dir, { recursive: true });
+      return new DriftMonitor(drift_state_dir);
+    })(),
   };
 
   const config: NightlyLoopConfig = {
