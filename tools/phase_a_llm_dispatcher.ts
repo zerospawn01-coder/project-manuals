@@ -215,7 +215,10 @@ const PATCH_CANDIDATE_SCHEMA = {
     estimated_blast_radius:        { type: 'STRING', enum: ['SELF', 'TENANT', 'GLOBAL'] },
     patch_diff:                    { type: 'STRING' },
     acceptance_criteria:           ACCEPTANCE_CRITERIA_SCHEMA,
-    negative_constraint_violations: { type: 'ARRAY' },
+    negative_constraint_violations: {
+      type: 'ARRAY',
+      items: { type: 'STRING' },
+    },
   },
   required: [
     'candidate_id',
@@ -266,7 +269,7 @@ export const CANDIDATE_LIST_RESPONSE_SCHEMA = {
 // Gemini REST API helpers
 // ---------------------------------------------------------------------------
 
-const DEFAULT_MODEL = 'gemini-2.0-flash';
+const DEFAULT_MODEL = 'gemini-2.5-flash';
 const GEMINI_API_BASE = 'https://generativelanguage.googleapis.com/v1beta/models';
 
 interface GeminiGenerateRequest {
@@ -277,6 +280,7 @@ interface GeminiGenerateRequest {
     responseSchema: object;
     temperature?: number;
     maxOutputTokens?: number;
+    thinkingConfig?: { thinkingBudget: number };
   };
 }
 
@@ -300,12 +304,22 @@ async function callGemini(
   req: GeminiGenerateRequest
 ): Promise<string> {
   const url = `${GEMINI_API_BASE}/${model}:generateContent?key=${api_key}`;
+  // NOTE: url はキーを含むためエラーメッセージに含めない。
+  const safe_endpoint = `${GEMINI_API_BASE}/${model}:generateContent?key=***`;
 
-  const response = await fetch(url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(req),
-  });
+  let response: Response;
+  try {
+    response = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(req),
+    });
+  } catch (network_err) {
+    // fetch 自体の失敗（DNS解決失敗・接続拒否等）— URLをマスクして再スロー
+    throw new Error(
+      `Gemini API network error (${safe_endpoint}): ${(network_err as Error).message}`
+    );
+  }
 
   const body = await response.json() as GeminiGenerateResponse;
 
@@ -314,10 +328,14 @@ async function callGemini(
     throw new Error(`Gemini API error: ${msg}`);
   }
 
+  const finish_reason = body.candidates?.[0]?.finishReason ?? 'unknown';
+  if (finish_reason !== 'STOP' && finish_reason !== 'stop') {
+    throw new Error(`Gemini stopped early (finishReason=${finish_reason}) — output may be truncated`);
+  }
+
   const text = body.candidates?.[0]?.content?.parts?.[0]?.text;
   if (typeof text !== 'string' || !text.trim()) {
-    const reason = body.candidates?.[0]?.finishReason ?? 'unknown';
-    throw new Error(`Gemini returned empty content (finishReason=${reason})`);
+    throw new Error(`Gemini returned empty content (finishReason=${finish_reason})`);
   }
 
   return text;
@@ -342,11 +360,15 @@ function parseAndValidateCandidateList(
   input_pack_id: string
 ): PhaseACandidateList {
   let parsed: Record<string, unknown>;
+  // Gemini 2.5 系はマークダウンコードブロックや BOM を混入させることがある
+  let cleaned = raw_text.trim().replace(/^\uFEFF/, '');
+  const md_match = cleaned.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/);
+  if (md_match) cleaned = md_match[1];
   try {
-    parsed = JSON.parse(raw_text);
+    parsed = JSON.parse(cleaned);
   } catch {
     throw new Error(
-      `Gemini returned non-JSON content:\n${raw_text.slice(0, 300)}`
+      `Gemini returned non-JSON content:\n${raw_text.slice(0, 500)}`
     );
   }
 
@@ -464,6 +486,7 @@ export class GeminiPhaseADispatcher implements PhaseALLMDispatcher {
         responseSchema: CANDIDATE_LIST_RESPONSE_SCHEMA,
         temperature: this.temperature,
         maxOutputTokens: this.max_output_tokens,
+        thinkingConfig: { thinkingBudget: 0 },
       },
     };
 
