@@ -326,7 +326,7 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
-  const model        = process.env['GEMINI_MODEL'] ?? 'gemini-2.0-flash';
+  const model        = process.env['GEMINI_MODEL'] ?? 'gemini-2.5-flash';
   const max_cands    = parseInt(process.env['MAX_CANDIDATES'] ?? '3', 10);
 
   // ── 2. Output directory ───────────────────────────────────────────────────
