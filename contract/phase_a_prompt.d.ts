@@ -294,6 +294,12 @@ export interface PhaseAInputPack {
   ledger_injection_filter: LedgerInjectionFilterConfig;
   /** Maximum number of candidates to generate in one call (hard cap). */
   max_candidates: number;
+  /**
+   * When F-010_SILENT_DRIFT is active and blast_radius_ceiling is set,
+   * candidates MUST NOT exceed this blast_radius value.
+   * null = no ceiling (normal operation).
+   */
+  blast_radius_ceiling?: 'SELF' | 'TENANT' | 'GLOBAL' | null;
 }
 
 // ---------------------------------------------------------------------------
