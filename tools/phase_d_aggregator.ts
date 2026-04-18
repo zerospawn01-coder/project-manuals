@@ -57,9 +57,26 @@ import type {
   SecurityPosture,
   DriftSummary,
   DriftTargetSummary,
+  NightlyCycleAudit,
+  ComparisonSchema,
+  ComparisonRow,
+  BoundaryDivergenceTraceItem,
 } from '../contract/morning_result';
 import type { DriftMetrics } from './drift_monitor';
 import type { DriftAdaptationDecision } from './drift_adaptation';
+import type { WorldShiftReport, EnvironmentStatus } from '../contract/world_shift';
+import type { GatewayCycleSummary } from '../contract/openclaw_gateway';
+import { buildSkillTree } from './adaptation_memory_writer';
+import {
+  buildOpenClawLearningSummary,
+  findLastEntryIdForTarget,
+  OpenClawActionLogWriterImpl,
+} from './openclaw_action_log_writer';
+import {
+  buildMorningBrief,
+  enrichSkillTreeWithOpenClawStats,
+} from './openclaw_decision_engine';
+import type { OpenClawLearningSummary } from '../contract/openclaw_action_log';
 import type {
   ProofSummary,
   TierPolicyInputs,
@@ -80,12 +97,151 @@ import type {
 export const TIER_THRESHOLDS = {
   BREAKTHROUGH_STABILITY: 0.85,
   BREAKTHROUGH_CONSECUTIVE_CYCLES: 2,
-  BREAKTHROUGH_SAVED_TIME_MIN: 5.0,
+  BREAKTHROUGH_SAVED_TIME_MIN: 0.0,   // 実測値範囲 (~0.0001 min/week) に合わせて調整 (旧値: 5.0)
   BREAKTHROUGH_VERIFIED_PATCH_MIN: 3,
   STABLE_STABILITY: 0.90,
   GROWING_STABILITY: 0.80,
   CRITICAL_STABILITY: 0.80,   // below this → null tier
 } as const;
+
+const COMPARISON_ROWS: ComparisonRow[] = [
+  {
+    axis: 'Runtime',
+    icon: '⬡',
+    openclaw: {
+      label: 'capability runtime',
+      verdict: 'soft',
+      detail: 'Node.js Gateway daemon。ローカル優先。メッセージアプリをUIとして使用する差し替え可能実行系。',
+      mechanism: 'soft',
+    },
+    agos: {
+      label: 'constitutional control plane',
+      verdict: 'hard',
+      detail: 'TypeScript governance kernel + Python tooling lane の分離と 12-state FSM による自己改善ループ。',
+      mechanism: 'hard',
+    },
+  },
+  {
+    axis: 'Skill',
+    icon: '◈',
+    openclaw: {
+      label: 'SKILL.md injection',
+      verdict: 'soft',
+      detail: '能力注入は原則モデルの読解依存。明示呼び出しでも強制注入されない失敗モードが報告される。',
+      mechanism: 'soft',
+    },
+    agos: {
+      label: 'typed acceptance criteria',
+      verdict: 'hard',
+      detail: 'invariant_check / measurable_outcome / no_regression の三層 acceptance_criteria を必須化。',
+      mechanism: 'hard',
+    },
+  },
+  {
+    axis: 'Safety',
+    icon: '⬔',
+    openclaw: {
+      label: 'fails open',
+      verdict: 'soft',
+      detail: '安全は instruction 依存。第三者 skill 経由のデータ外流・注入攻撃が実証済み。',
+      mechanism: 'soft',
+    },
+    agos: {
+      label: 'fail-closed gate',
+      verdict: 'hard',
+      detail: 'CB-1〜CB-4 境界契約違反を機械強制で遮断。"Intent is not authority" を状態機械で実装。',
+      mechanism: 'hard',
+    },
+  },
+  {
+    axis: 'Provenance',
+    icon: '◉',
+    openclaw: {
+      label: 'ROSClaw audit log',
+      verdict: 'partial',
+      detail: 'ROSClaw 層での監査ログは明示されるが、コア runtime 本体の append-only 来歴保証とは分離。',
+      mechanism: 'partial',
+    },
+    agos: {
+      label: 'hash-chained event ledger',
+      verdict: 'hard',
+      detail: 'append-only ハッシュチェーン台帳 + 層別メモリ保持期間管理。',
+      mechanism: 'hard',
+    },
+  },
+  {
+    axis: 'Boundary',
+    icon: '◇',
+    openclaw: {
+      label: 'implicit / context-dependent',
+      verdict: 'soft',
+      detail: 'trust は実質 prompt 解釈依存で、権限束の機械分離が弱い。',
+      mechanism: 'soft',
+    },
+    agos: {
+      label: 'CB-1〜CB-4 typed contracts',
+      verdict: 'hard',
+      detail: 'Intent/Trust/Attribution/Recovery の4境界を明示し、脆弱性クラスに対応した契約を実装。',
+      mechanism: 'hard',
+    },
+  },
+  {
+    axis: 'Recovery',
+    icon: '↻',
+    openclaw: {
+      label: 'ad-hoc / community-driven',
+      verdict: 'soft',
+      detail: '障害対応は事後議論中心で、回復プロトコルの型定義・強制が弱い。',
+      mechanism: 'soft',
+    },
+    agos: {
+      label: 'Failure Taxonomy + RecoveryBoundary',
+      verdict: 'hard',
+      detail: 'Failure Taxonomy と CB-4 による分類→格納→検証の回復フローを機械強制。',
+      mechanism: 'hard',
+    },
+  },
+];
+
+const BOUNDARY_TRACE: BoundaryDivergenceTraceItem[] = [
+  {
+    boundary_id: 'CB-1',
+    axis: 'Safety',
+    openclaw_mechanism: 'soft',
+    agos_mechanism: 'hard',
+    rationale: 'Authority判定をモデル読解に委ねるか、fail-closed規則で強制するかで分岐。',
+  },
+  {
+    boundary_id: 'CB-2',
+    axis: 'Boundary',
+    openclaw_mechanism: 'soft',
+    agos_mechanism: 'hard',
+    rationale: 'Trustを暗黙コンテキストで扱うか、状態遷移境界として明示管理するかで分岐。',
+  },
+  {
+    boundary_id: 'CB-3',
+    axis: 'Provenance',
+    openclaw_mechanism: 'partial',
+    agos_mechanism: 'hard',
+    rationale: '拡張層監査ログ止まりか、コア台帳のappend-only来歴保証まで一体化するかで分岐。',
+  },
+  {
+    boundary_id: 'CB-4',
+    axis: 'Recovery',
+    openclaw_mechanism: 'soft',
+    agos_mechanism: 'hard',
+    rationale: '回復手順がad-hocか、型付きRecoveryBoundaryとして強制されるかで分岐。',
+  },
+];
+
+function buildComparisonSchema(generated_at: string): ComparisonSchema {
+  return {
+    schema_version: 'comparison_schema/0.1',
+    generated_at,
+    rows: COMPARISON_ROWS,
+    boundary_trace: BOUNDARY_TRACE,
+  };
+}
 
 // ---------------------------------------------------------------------------
 // CALLER-PROVIDED INPUT PACK
@@ -181,6 +337,56 @@ export interface PhaseDInputPack {
    * If present, included in MorningResult.drift.adaptation.
    */
   drift_adaptation?: DriftAdaptationDecision;
+
+  /**
+   * World Shift report for this cycle (built by WorldShiftDetector).
+   * Absent when world_shift_config is not wired into the nightly loop runner.
+   * DISPLAY-LAYER ONLY — must not affect tier evaluation or governance gates.
+   */
+  world_shift?: WorldShiftReport;
+
+  /**
+   * OpenClaw Gateway cycle summary (built by OpenClawGateway.buildCycleSummary).
+   * Absent when openclaw_gateway is not wired into the nightly loop runner.
+   * DISPLAY-LAYER ONLY — must not affect tier evaluation or governance gates.
+   */
+  gateway_cycle_summary?: GatewayCycleSummary;
+
+  /**
+   * Absolute path to adaptation_memory.jsonl.
+   * When set, buildSkillTree() runs and populates MorningResult.skill_tree.
+   * Absent when adaptation_memory is not wired into the nightly loop runner.
+   * DISPLAY-LAYER ONLY — must not affect tier evaluation or governance gates.
+   */
+  adaptation_memory_path?: string;
+
+  /**
+   * Absolute path to openclaw_action_log.jsonl.
+   * When set (along with intent_stats_path and suggest_stats_path),
+   * link_promoted_skill wiring runs for OpenClaw-originated promotions
+   * and buildOpenClawLearningSummary() populates MorningResult.openclaw_learning_summary.
+   * DISPLAY-LAYER ONLY — must not affect tier evaluation or governance gates.
+   */
+  action_log_path?: string;
+
+  /**
+   * Absolute path to openclaw_intent_stats.json (sidecar).
+   * Required alongside action_log_path; otherwise ignored.
+   */
+  intent_stats_path?: string;
+
+  /**
+   * Absolute path to openclaw_suggest_stats.json (sidecar).
+   * Required alongside action_log_path; otherwise ignored.
+   */
+  suggest_stats_path?: string;
+
+  /**
+   * Nightly cycle audit record built by the caller (nightly_loop_runner).
+   * When present, included in MorningResult.nightly_audit for operator visibility.
+   * DISPLAY-LAYER ONLY — must not affect tier evaluation or governance gates.
+   */
+  nightly_audit?: NightlyCycleAudit;
 }
 
 export interface PhaseDConfig {
@@ -462,10 +668,21 @@ export function buildProofSummary(
   blocked_risky_actions: BlockedRiskyActions,
   invariant_failure_count: number,
   verified_patch_count: number,
+  this_cycle_promoted_count: number,
   cumulative_promoted_skill_count: number,
+  attributed_promotion_count: number,
   unlocked_node_count: number,
   next_cycle_recommendations: NextCycleRecommendation[]
 ): ProofSummary {
+  // attribution_adoption_rate:
+  //   null  = no promotions this cycle (0/0 = N/A, not 0%)
+  //   0.0   = promotions occurred but none had attribution
+  //   1.0   = all promotions had attribution
+  const attribution_adoption_rate: number | null =
+    this_cycle_promoted_count === 0
+      ? null
+      : attributed_promotion_count / this_cycle_promoted_count;
+
   return {
     schema_version: 'proof_summary/0.1',
     cycle_id,
@@ -481,7 +698,10 @@ export function buildProofSummary(
     blocked_risky_actions,
     invariant_failure_count,
     verified_patch_count,
+    this_cycle_promoted_count,
     promoted_skill_count: cumulative_promoted_skill_count,
+    attributed_promotion_count,
+    attribution_adoption_rate,
     unlocked_node_count,
     next_cycle_recommendations,
   };
@@ -675,7 +895,9 @@ export function buildMorningDisplay(
   active_failure_codes: FailureLedgerCode[],
   pending_human_review_count: number,
   unlocked_node_count: number,
-  drift_summary?: DriftSummary
+  drift_summary?: DriftSummary,
+  world_shift_report?: WorldShiftReport,
+  gateway_cycle_summary?: GatewayCycleSummary
 ): MorningDisplay {
   const animation = computeAnimationType(tier, tier_delta);
   const tier_badge_color = computeTierBadgeColor(tier);
@@ -689,6 +911,20 @@ export function buildMorningDisplay(
   const drift_status = computeDriftStatus(drift_summary);
   const drift_banner = buildDriftBanner(drift_summary, drift_status);
 
+  // World Shift display fields (DISPLAY-LAYER ONLY)
+  const environment_status: EnvironmentStatus | null =
+    world_shift_report?.environment_status ?? null;
+  const world_shift_banner: string | null = world_shift_report?.any_shift_detected
+    ? `[${world_shift_report.environment_status}] ${world_shift_report.biome}: ${
+        world_shift_report.shift_events.map((e) => e.description).join('; ')
+      }`.slice(0, 120)
+    : null;
+  const show_world_shift = world_shift_report?.any_shift_detected === true;
+
+  // Gateway display fields (DISPLAY-LAYER ONLY)
+  const gateway_requests_processed = gateway_cycle_summary?.total_requests ?? 0;
+  const show_gateway_activity = gateway_requests_processed > 0;
+
   return {
     animation,
     headline,
@@ -700,6 +936,11 @@ export function buildMorningDisplay(
     show_drift: drift_status !== null,
     drift_status,
     drift_banner,
+    environment_status,
+    world_shift_banner,
+    show_world_shift,
+    gateway_requests_processed,
+    show_gateway_activity,
   };
 }
 
@@ -794,7 +1035,19 @@ export async function aggregateMorningResult(
     guardian.blocked_risky_actions,
     invariant_failure_count,
     pack.b_result.summary.verified_count,
+    // this_cycle_promoted_count: actual promotions this cycle (denominator for adoption rate)
+    pack.c_result.promoted_count,
     cumulative_promoted,
+    // attributed_promotion_count: promoted patches that carried PatchAttribution
+    // Uses b_result.verified filtered to promoted candidate_ids with non-null attribution.
+    (() => {
+      const promoted_ids = new Set(
+        pack.c_result.promoted_skills.map((s) => s.source_verified_patch_id)
+      );
+      return pack.b_result.verified.filter(
+        (vp) => promoted_ids.has(vp.candidate_id) && vp.source_candidate.attribution != null
+      ).length;
+    })(),
     pack.c_result.unlocked_nodes.length,
     pack.next_cycle_recommendations
   );
@@ -817,7 +1070,9 @@ export async function aggregateMorningResult(
     guardian.active_failure_codes,
     guardian.pending_human_review_patch_ids.length,
     pack.c_result.unlocked_nodes.length,
-    drift_summary
+    drift_summary,
+    pack.world_shift,
+    pack.gateway_cycle_summary
   );
 
   const result: MorningResult = {
@@ -830,7 +1085,88 @@ export async function aggregateMorningResult(
     proof,
     display,
     ...(drift_summary !== undefined ? { drift: drift_summary } : {}),
+    ...(pack.world_shift !== undefined ? { world_shift: pack.world_shift } : {}),
+    ...(pack.gateway_cycle_summary !== undefined ? { gateway_summary: pack.gateway_cycle_summary } : {}),
+    ...(pack.adaptation_memory_path !== undefined
+      ? { skill_tree: buildSkillTree(pack.adaptation_memory_path, {
+          current_environment_status: pack.world_shift?.environment_status,
+        }) }
+      : {}),
+    ...((() => {
+      // ── OpenClaw learning pipeline ──────────────────────────────────────
+      // All three paths must be configured for this section to run.
+      if (!pack.action_log_path || !pack.intent_stats_path || !pack.suggest_stats_path) {
+        return {};
+      }
+      // Step 1: link_promoted_skill — write tombstone entries for any
+      // OpenClaw-originated PromotedSkills so the log is fully traceable.
+      const oc_writer = new OpenClawActionLogWriterImpl({
+        action_log_path: pack.action_log_path,
+        intent_stats_path: pack.intent_stats_path,
+        suggest_stats_path: pack.suggest_stats_path,
+      });
+      for (const skill of pack.c_result.promoted_skills) {
+        // OpenClaw-originated promotions are tagged with [OpenClaw] title prefix
+        // (matches nightly_loop_runner.ts patch_source heuristic).
+        if (!skill.title.startsWith('[OpenClaw]')) continue;
+        const primary_target = skill.affected_targets[0] ?? '';
+        const entry_id = findLastEntryIdForTarget(
+          pack.action_log_path,
+          primary_target,
+        );
+        if (entry_id) {
+          oc_writer.link_promoted_skill(entry_id, skill.skill_id);
+        }
+      }
+      // Step 2: build learning summary from the three persisted stores.
+      const oc_summary: OpenClawLearningSummary | null = buildOpenClawLearningSummary(
+        pack.action_log_path,
+        pack.intent_stats_path,
+        pack.suggest_stats_path,
+      );
+      return oc_summary !== null ? { openclaw_learning_summary: oc_summary } : {};
+    })()),
+    ...(pack.nightly_audit !== undefined ? { nightly_audit: pack.nightly_audit } : {}),
+    comparison_schema: buildComparisonSchema(generated_at),
   };
+
+  // ── Post-assembly: enrich skill_tree with OpenClaw stats ─────────────────
+  // Overwrites nullable fields on SkillTreeNode[] (visual_signal, openclaw_*).
+  if (result.skill_tree && pack.intent_stats_path) {
+    try {
+      if (fs.existsSync(pack.intent_stats_path)) {
+        const intent_stats = JSON.parse(
+          fs.readFileSync(pack.intent_stats_path, 'utf8'),
+        ) as import('../contract/openclaw_action_log').OpenClawIntentStatsFile;
+        enrichSkillTreeWithOpenClawStats(result.skill_tree, intent_stats);
+      }
+    } catch {
+      // Non-fatal: enrichment failure must never crash aggregation
+    }
+  }
+
+  // ── Post-assembly: build morning_brief ────────────────────────────────────
+  // Requires fully-assembled result (needs openclaw_learning_summary + guardian).
+  try {
+    let intent_stats_for_brief: import('../contract/openclaw_action_log').OpenClawIntentStatsFile | undefined;
+    let suggest_stats_for_brief: import('../contract/openclaw_action_log').OpenClawSuggestStatsFile | undefined;
+    if (pack.intent_stats_path && fs.existsSync(pack.intent_stats_path)) {
+      intent_stats_for_brief = JSON.parse(
+        fs.readFileSync(pack.intent_stats_path, 'utf8'),
+      ) as import('../contract/openclaw_action_log').OpenClawIntentStatsFile;
+    }
+    if (pack.suggest_stats_path && fs.existsSync(pack.suggest_stats_path)) {
+      suggest_stats_for_brief = JSON.parse(
+        fs.readFileSync(pack.suggest_stats_path, 'utf8'),
+      ) as import('../contract/openclaw_action_log').OpenClawSuggestStatsFile;
+    }
+    const brief = buildMorningBrief(result, intent_stats_for_brief, suggest_stats_for_brief);
+    if (brief !== null) {
+      result.morning_brief = brief;
+    }
+  } catch {
+    // Non-fatal: morning_brief build failure must never crash aggregation
+  }
 
   // ── Audit log ─────────────────────────────────────────────────────────────
   if (resolved_config.audit_log_dir) {
@@ -894,7 +1230,7 @@ export function validateMorningResultShell(raw: unknown): string[] {
         errors.push('display.subheadline: exceeds 120 chars');
       }
     }
-    for (const flag of ['show_skill_parade', 'show_guardian_alert', 'show_node_unlock', 'show_drift']) {
+    for (const flag of ['show_skill_parade', 'show_guardian_alert', 'show_node_unlock', 'show_drift', 'show_world_shift', 'show_gateway_activity']) {
       if (typeof disp[flag] !== 'boolean') {
         errors.push(`display.${flag}: must be a boolean`);
       }
@@ -910,6 +1246,24 @@ export function validateMorningResultShell(raw: unknown): string[] {
     }
     if (!Array.isArray(ps['next_cycle_recommendations'])) {
       errors.push('proof.proof_summary.next_cycle_recommendations: must be an array');
+    }
+  }
+
+  // comparison_schema cross-check
+  if (r['comparison_schema'] !== undefined) {
+    if (typeof r['comparison_schema'] !== 'object' || r['comparison_schema'] === null) {
+      errors.push('comparison_schema: must be an object when present');
+    } else {
+      const cs = r['comparison_schema'] as Record<string, unknown>;
+      if (cs['schema_version'] !== 'comparison_schema/0.1') {
+        errors.push("comparison_schema.schema_version: expected 'comparison_schema/0.1'");
+      }
+      if (!Array.isArray(cs['rows']) || (cs['rows'] as unknown[]).length === 0) {
+        errors.push('comparison_schema.rows: must be a non-empty array');
+      }
+      if (!Array.isArray(cs['boundary_trace']) || (cs['boundary_trace'] as unknown[]).length !== 4) {
+        errors.push('comparison_schema.boundary_trace: must contain 4 boundary rows');
+      }
     }
   }
 

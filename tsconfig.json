@@ -4,9 +4,9 @@
     "module": "CommonJS",
     "moduleResolution": "node",
     "esModuleInterop": true,
+    "ignoreDeprecations": "5.0",
     "strict": false,
     "skipLibCheck": true,
-    "baseUrl": ".",
     "outDir": "dist",
     "rootDir": "."
   },

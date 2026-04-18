@@ -272,6 +272,82 @@ function collectInvariantStress(
 }
 
 // ---------------------------------------------------------------------------
+// Section 4 — repo_health_snapshot.json (from collect_repo_inputs.ts)
+// ---------------------------------------------------------------------------
+
+interface RepoHealthSnapshot {
+  generated_at?: string;
+  build?:  { exit_code: number; error_count: number; duration_ms: number; stderr_excerpt?: string };
+  tests?:  { exit_code: number; passed: number; failed: number; failed_ids?: string[]; duration_ms: number };
+  lint?:   { exit_code: number; error_count: number; warning_count: number; duration_ms: number };
+}
+
+function collectFromRepoHealthSnapshot(
+  dataDir: string,
+  errors: ObservationWindow['error_log_entries'],
+  workflows: ObservationWindow['workflow_recent_results'],
+  failing_tests: ObservationWindow['consecutive_failing_tests']
+): void {
+  const snap = loadJsonSafe(path.join(dataDir, 'repo_health_snapshot.json')) as RepoHealthSnapshot | null;
+  if (!snap) return;
+
+  const now = snap.generated_at ?? isoNow();
+
+  // Build errors → error_log_entries
+  if (snap.build && snap.build.error_count > 0) {
+    errors.push({
+      source_file:           'tsconfig.json',
+      function_name:         'tsc --noEmit',
+      error_code:            'BUILD_ERROR',
+      error_message_excerpt: `tsc reported ${snap.build.error_count} error(s). Excerpt: ${(snap.build.stderr_excerpt ?? '').slice(0, 200)}`,
+      first_seen_at:         now,
+      occurrence_count:      snap.build.error_count,
+    });
+  }
+
+  // Lint errors → error_log_entries
+  if (snap.lint && snap.lint.error_count > 0) {
+    errors.push({
+      source_file:           'tools/**/*.ts',
+      function_name:         'eslint',
+      error_code:            'LINT_ERROR',
+      error_message_excerpt: `ESLint reported ${snap.lint.error_count} error(s) and ${snap.lint.warning_count} warning(s).`,
+      first_seen_at:         now,
+      occurrence_count:      snap.lint.error_count,
+    });
+  }
+
+  // Build duration → workflow_recent_results
+  if (snap.build && snap.build.duration_ms > 0) {
+    workflows.push({
+      workflow_id:       'repo/build/tsc',
+      recent_median_ms:  snap.build.duration_ms,
+    });
+  }
+
+  // Test duration → workflow_recent_results
+  if (snap.tests && snap.tests.duration_ms > 0) {
+    workflows.push({
+      workflow_id:       'repo/test/phase14',
+      recent_median_ms:  snap.tests.duration_ms,
+    });
+  }
+
+  // Failing tests → consecutive_failing_tests
+  if (snap.tests && snap.tests.failed > 0) {
+    const ids = snap.tests.failed_ids && snap.tests.failed_ids.length > 0
+      ? snap.tests.failed_ids
+      : [`test/phase14/unknown_${snap.tests.failed}_failures`];
+    for (const id of ids) {
+      failing_tests.push({
+        test_id:                  id,
+        consecutive_fail_cycles:  1,
+      });
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
 // PUBLIC API — Mode 1: Pure TypeScript file reader
 // ---------------------------------------------------------------------------
 
@@ -285,11 +361,18 @@ function collectInvariantStress(
 export function collectObservationWindowFromFiles(
   dataDir: string = DEFAULT_DATA_DIR
 ): ObservationWindow {
+  const error_log_entries      = collectErrorLogEntries(dataDir);
+  const workflow_recent_results = collectWorkflowResults(dataDir);
+  const consecutive_failing_tests: ObservationWindow['consecutive_failing_tests'] = [];
+
+  // Merge real-time repo health data (written by collect_repo_inputs.ts)
+  collectFromRepoHealthSnapshot(dataDir, error_log_entries, workflow_recent_results, consecutive_failing_tests);
+
   return {
-    error_log_entries:      collectErrorLogEntries(dataDir),
-    workflow_recent_results: collectWorkflowResults(dataDir),
+    error_log_entries,
+    workflow_recent_results,
     invariant_stress_counts: collectInvariantStress(dataDir),
-    consecutive_failing_tests: [],
+    consecutive_failing_tests,
   };
 }
 

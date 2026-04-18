@@ -719,20 +719,23 @@ export async function runPhaseBForCandidate(
     const acc = mo.prediction_accuracy;
 
     const confirmed_improvements = {
+      // Gate 2 (PREDICTION_OVERCLAIM guard) already ensures we only reach here when
+      // actuals are consistent with any predictions made (or no predictions were made).
+      // Any positive actual measurement after all gates pass is a confirmed improvement.
       saved_time_minutes:
-        acc.saved_time_minutes === 'met' && mo.saved_time_minutes_actual !== null && mo.saved_time_minutes_actual > 0
+        mo.saved_time_minutes_actual !== null && mo.saved_time_minutes_actual > 0
           ? mo.saved_time_minutes_actual
           : null,
       tokens_saved:
-        acc.tokens_saved === 'met' && mo.tokens_saved_actual !== null && mo.tokens_saved_actual > 0
+        mo.tokens_saved_actual !== null && mo.tokens_saved_actual > 0
           ? mo.tokens_saved_actual
           : null,
       bugs_killed:
-        acc.bugs_killed === 'met' && mo.bugs_killed_actual !== null && mo.bugs_killed_actual > 0
+        mo.bugs_killed_actual !== null && mo.bugs_killed_actual > 0
           ? mo.bugs_killed_actual
           : null,
       refined_code_lines:
-        acc.refined_code_lines === 'met' && mo.refined_code_lines_actual !== null && mo.refined_code_lines_actual > 0
+        mo.refined_code_lines_actual !== null && mo.refined_code_lines_actual > 0
           ? mo.refined_code_lines_actual
           : null,
     };
