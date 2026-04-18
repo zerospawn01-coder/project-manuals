@@ -1,0 +1,23 @@
+id: "INV-010"
+slug: "no_silent_drift"
+failure_code: "F-010_SILENT_DRIFT"
+severity: HIGH
+non_waivable: false
+
+statement: >
+  When DriftMonitor detects a statistically significant upward trend in any
+  tracked workflow's execution time (slope_20 > 0 for 20 consecutive runs),
+  no patch with blast_radius = GLOBAL may be promoted until drift is resolved.
+  Silent drift — drift that is not logged and surfaced — is also prohibited.
+
+detection:
+  method: drift_monitor
+  trigger: "slope_20 > 0 AND consecutive_runs >= 20"
+  block_global_patches: true
+  logging_required: true   # must appear in observation_window.error_log_entries
+
+enforcement:
+  phase: "C"
+  gate: "promotion_gate"
+  action: "block_global_patches_and_ledger_write"
+  block_code: "PROMOTION_GATE_FAIL"

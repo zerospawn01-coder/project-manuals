@@ -143,8 +143,35 @@ export interface ProofSummary {
   /** Patches that passed all gates and were promoted this cycle. */
   verified_patch_count: number;
 
+  /**
+   * Number of patches promoted to production THIS cycle (not cumulative).
+   * This is the denominator for attribution_adoption_rate.
+   * Distinct from verified_patch_count (Phase B pass count) and
+   * promoted_skill_count (cumulative all-cycles total).
+   */
+  this_cycle_promoted_count: number;
+
   /** Cumulative total of skills promoted to production (all cycles). */
   promoted_skill_count: number;
+
+  /**
+   * Number of promoted patches that carried a PatchAttribution this cycle.
+   * Subset of this_cycle_promoted_count.
+   * Used as a trailing metric to measure attribution adoption; feeds back
+   * into Phase A hint scoring via adaptation_memory_writer.buildAdaptationHintBlock.
+   */
+  attributed_promotion_count: number;
+
+  /**
+   * Fraction of promoted patches that carried attribution this cycle.
+   *   null  when this_cycle_promoted_count == 0  (no promotions → N/A, not 0%)
+   *   0.0   when promotions occurred but none had attribution
+   *   1.0   when all promotions had attribution
+   *
+   * hint_score feedback: only forwarded to buildAdaptationHintBlock when non-null.
+   * Display: render as "N/A" when null, "X%" when number.
+   */
+  attribution_adoption_rate: number | null;
 
   /** New capability nodes activated this cycle. */
   unlocked_node_count: number;
@@ -189,12 +216,55 @@ export interface TaskStateMachineRecord {
 // ---------------------------------------------------------------------------
 
 export type FailureLedgerCode =
+  // ── Constitutional (統治破壊) ───────────────────────────────────────────────
+  /** #3  Patch modifies governance kernel (gate/, ledger/, constitution) — 1 byte disallowed. */
   | 'F-001_SECURITY_DOWNGRADE'
+  /** #7  Request reaches Phase A without passing through the gateway. */
   | 'F-002_DEPENDENCY_IGNORE_DELETE'
+  /** #3  Context consumed during evaluation — Phase A sees stale snapshot. */
   | 'F-003_CONTEXT_REGRESSION'
+  /** #10 Benchmark subprocess made an external network call (deny_external_network violated). */
+  | 'F-014_SANDBOX_EGRESS_VIOLATION'
+  /** #7  Action reached execution without a valid GatewayDecision record. */
+  | 'F-018_CONSTITUTIONAL_BYPASS'
+
+  // ── Evaluation (評価正当性) ────────────────────────────────────────────────
+  /** #2  saved_time_minutes or stability_index populated from free-text, not measured. */
   | 'F-004_METRIC_INFLATION'
+  /** #9  patch_diff touches benchmark/measurement scripts (benchmark_protected_paths match). */
+  | 'F-005_BENCHMARK_PATH_WRITE'
+  /** #11 Metrics field populated by agent self-report instead of benchmark subprocess output. */
+  | 'F-006_SELF_REPORTED_METRIC'
+  /** #12 Candidate promoted from repetitions < 3 (single or dual sample — insufficient confidence). */
+  | 'F-007_SINGLE_SAMPLE_PROMOTION'
+  /** #15 Ledger replay produced a hash that does not match the originally recorded hash. */
+  | 'F-008_HASH_MISMATCH_REPLAY'
   /** Measurement environment returned invalid/null metrics: sandbox env issue, not candidate fault. */
-  | 'F-009_MEASUREMENT_ENV_INVALID';
+  | 'F-009_MEASUREMENT_ENV_INVALID'
+  /** F-010 Silent performance drift detected by DriftMonitor (OLS slope < -ε over 20 runs). */
+  | 'F-010_SILENT_DRIFT'
+
+  // ── State (状態整合性) ─────────────────────────────────────────────────────
+  /** #1  TaskStateMachineRecord was absent or unreadable on restart — cycle lost. */
+  | 'F-011_STATE_LOSS_ON_RESTART'
+  /** #5  patch_diff applied partially: some hunks succeeded, others failed — split state. */
+  | 'F-012_PARTIAL_APPLY_SPLIT'
+  /** #14 PROMOTING triggered with no confirmed restore-point snapshot available. */
+  | 'F-013_MISSING_RESTORE_POINT'
+
+  // ── Integrity (再現性・隔離) ───────────────────────────────────────────────
+  /** #6  Rerunning the same patch + inputs produces a different benchmark hash. */
+  | 'F-015_NONDETERMINISTIC_PATCH'
+
+  // ── Observability (透明性) ─────────────────────────────────────────────────
+  /** #4  GatewayAuditEntry written with missing required fields or audit log truncated. */
+  | 'F-016_AUDIT_LOG_DEGRADATION'
+  /** #13 HARD_REJECT emitted with violated_invariant_ids absent when IDs were determinable. */
+  | 'F-017_REJECTION_REASON_INVISIBLE'
+
+  // ── Boundary (負の学習) ────────────────────────────────────────────────────
+  /** #8  Phase A generated a candidate that matches an active FailureLedgerEntry negative_constraint. */
+  | 'F-019_NEGATIVE_CONSTRAINT_IGNORED';
 
 export interface FailureLedgerEntry {
   code: FailureLedgerCode;

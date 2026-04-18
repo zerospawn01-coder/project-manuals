@@ -171,7 +171,9 @@ export interface VerifiedPatch {
   /**
    * Verified improvement values — these are the ACTUAL numbers that flow
    * into ProofSummary fields after PROMOTING gate passes.
-   * Populated only for metrics where actual > 0 AND prediction was met.
+   * Populated for metrics where actual > 0 after all gate checks passed.
+   * The PREDICTION_OVERCLAIM guard (gate 2) ensures actuals are consistent
+   * with any predictions; unpredicted positive actuals are also credited.
    */
   confirmed_improvements: {
     saved_time_minutes: number | null;

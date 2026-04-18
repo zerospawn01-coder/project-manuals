@@ -1,0 +1,23 @@
+id: "INV-009"
+slug: "measurement_env_valid"
+failure_code: "F-009_MEASUREMENT_ENV_INVALID"
+severity: HIGH
+non_waivable: false
+
+statement: >
+  The sandbox measurement environment must produce non-null, non-zero metric
+  values for the metrics declared in the candidate's acceptance criteria.
+  An all-null result indicates infrastructure failure, not candidate failure,
+  and does not trigger a negative constraint on the candidate.
+
+detection:
+  method: sandbox_measurement
+  reject_on: "all_declared_metrics_are_null_or_zero"
+  negative_constraint_injected: false   # infrastructure issue — not candidate's fault
+
+enforcement:
+  phase: "B"
+  gate: "measurable_outcome"
+  action: "reject_no_ledger_write"   # conditional: write only when pattern >= 3
+  pattern_threshold_for_ledger_write: 3
+  block_code: "PROMOTION_GATE_FAIL"

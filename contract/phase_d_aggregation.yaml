@@ -1,0 +1,251 @@
+# phase_d_aggregation.yaml
+# Schema version: phase_d_aggregation/0.1
+# Created at: 2026-04-19
+#
+# AGGREGATING 状態の権威仕様。
+# nightly_state_machine/0.1 が凍結された後、AGGREGATING 状態の詳細を
+# 独立ファイルとして定義する。
+#
+# ┌──────────────────────────────────────────────────────────────────────────┐
+# │  ...PROMOTING → AGGREGATING → OBSERVING (next cycle)                    │
+# │                                                                          │
+# │  AGGREGATING は morning_result の組み立て専用状態。                         │
+# │  learning 統合・memory 書き込みは PROMOTING 後に完了済みであり、               │
+# │  AGGREGATING の責務外である。                                              │
+# └──────────────────────────────────────────────────────────────────────────┘
+#
+# ---------------------------------------------------------------------------
+# 責務境界 (boundary)
+# ---------------------------------------------------------------------------
+#
+#   AGGREGATING is responsible for:
+#     - Tier 評価 (computeTierPolicy)
+#     - GuardianReport 組み立て (security_posture, pending_review_ids)
+#     - MetricsReport 組み立て (delta 計算)
+#     - ProofSummary 組み立て (attributed_promotion_count を含む)
+#     - MorningDisplay 組み立て (animation, headline, flags — zero IF in renderer)
+#     - MorningResult を run_dir に書き込む
+#
+#   AGGREGATING is NOT responsible for:
+#     - adaptation_memory.jsonl への書き込み  # PROMOTING 後に完了済み
+#     - reuse_stats / env_scores サイドカー更新  # 同上
+#     - next_cycle_recommendations の生成      # Phase A の責務
+#     - review_queue.json への書き込み          # PROMOTING 後に完了済み
+#
+# ---------------------------------------------------------------------------
+# アクションレジストリ (nightly_state_machine/0.1 から継承)
+# ---------------------------------------------------------------------------
+#
+#   aggregateMorningResult:
+#     → phase_d_aggregator.aggregateMorningResult(pack, config)
+#     → MorningResult を run_dir/morning_result.json に書き込む
+#
+#   validate_morning_result_shell:
+#     → phase_d_aggregator.validateMorningResultShell(raw)
+#     → エラーがあれば loop_run_record.errors[] に追記して OBSERVING へ
+
+schema_version: "phase_d_aggregation/0.1"
+
+# ---------------------------------------------------------------------------
+# AGGREGATING 状態定義
+# ---------------------------------------------------------------------------
+
+AGGREGATING:
+  description: >
+    Phase C (PROMOTING) の完了後に実行される集約フェーズ。
+    今サイクルの全結果を morning_result として組み立て、
+    run_dir に永続化したうえで OBSERVING に遷移する。
+    本状態は常に完了する — パッチがゼロ件でも CRITICAL tier でも
+    AGGREGATING は morning_result を生成して OBSERVING に戻る。
+
+  inputs:
+    required:
+      - b_result:        "PhaseBBatchResult — TESTING の全結果"
+      - c_result:        "PromotingGateResult — PROMOTING の全結果"
+      - stability_index: "StabilityIndex — 今サイクルの §1 スコア"
+      - previous_tier:   "EvolutionTier | null — 前サイクルの tier"
+      - legitimacy_tier: "'L0' | 'L1' | 'L2'"
+    optional:
+      - drift_metrics:          "DriftMetrics[] — DriftMonitor が有効な場合"
+      - drift_adaptation:       "DriftAdaptationDecision"
+      - world_shift:            "WorldShiftReport — WorldShiftDetector が有効な場合"
+      - gateway_cycle_summary:  "GatewayCycleSummary — OpenClawGateway が有効な場合"
+      - adaptation_memory_path: "string — SkillTree 構築に使用 (DISPLAY-LAYER ONLY)"
+      - nightly_audit:          "NightlyCycleAudit"
+
+  outputs:
+    - morning_result: "MorningResult — run_dir/morning_result.json に書き込み"
+
+  evaluation_sequence:
+
+    - step: 1
+      name: "Tier evaluation"
+      description: >
+        computeTierPolicy(TierPolicyInputs, previous_tier) を呼び出し、
+        今サイクルの EvolutionTier を決定する。
+        TierPolicyInputs に含まれるフィールドのみが tier 評価に使用される。
+        attributed_promotion_count は tier 評価に影響しない。
+      gate_type: DETERMINISTIC
+      predicate: "always succeeds — CRITICAL は tier 値であり失敗ではない"
+
+    - step: 2
+      name: "GuardianReport assembly"
+      description: >
+        buildGuardianReport(b_result, c_result, active_failure_ledger,
+          invariant_failure_count) を呼び出す。
+        security_posture は RED/AMBER/GREEN の三値:
+          RED:   INV_VIOLATION_REJECT イベント OR F-001_SECURITY_DOWNGRADE
+          AMBER: invariant_failure_count > 0 OR blocked_risky_actions.count > 0
+          GREEN: both == 0
+        注意: attributed_promotion_count は security_posture に影響しない。
+              LLM 出力品質の問題は hint_score フィードバックループで対処する。
+      gate_type: DETERMINISTIC
+
+    - step: 3
+      name: "ProofSummary assembly (attributed_promotion_count)"
+      description: >
+        buildProofSummary() を呼び出す。
+        attributed_promotion_count は今サイクルに PROMOTED かつ
+        source_candidate.attribution != null のパッチ件数。
+        この値は観測メトリクスとして記録されるのみ:
+          - guardian_status には影響しない
+          - tier 評価には影響しない
+          - on_proof_anomaly ブランチは存在しない (/0.1 設計判断)
+        連続ゼロへの対処は将来 F-021_NO_ATTRIBUTED_PROMOTIONS 失敗コードの
+        登録で行う (/0.2 以降の判断)。
+      gate_type: DETERMINISTIC
+      metric_semantics:
+        this_cycle_promoted_count:
+          type: "non-negative integer"
+          description: >
+            今サイクルで PROMOTED されたパッチの実数。
+            attribution_adoption_rate の分母。
+            verified_patch_count (Phase B 通過数) とは別物。
+            promoted_skill_count (全サイクル累積) とも別物。
+
+        attributed_promotion_count:
+          type: "non-negative integer, subset of this_cycle_promoted_count"
+          description: >
+            今サイクルの PROMOTED パッチのうち source_candidate.attribution != null のもの。
+
+        attribution_adoption_rate:
+          type: "number | null"
+          computation: "attributed_promotion_count / this_cycle_promoted_count"
+          semantics:
+            null:   "this_cycle_promoted_count == 0 → 昇格なし → N/A (0% ではない)"
+            "0.0":  "昇格があったが全件 attribution なし → proof maturity 不足"
+            "1.0":  "全昇格パッチが attribution 付き → 完全成熟"
+          display_rule: >
+            null  → 「N/A」と表示
+            number → 「X%」と表示 (小数点 1 桁まで)
+          feed_forward_condition: >
+            non-null の場合のみ buildAdaptationHintBlock に渡す。
+            null (昇格ゼロ) 時は hint_score に影響させない。
+          zero_meaning: >
+            this_cycle_promoted_count > 0 かつ attributed_promotion_count == 0 の時のみ
+            proof maturity の不足を意味する。
+            this_cycle_promoted_count == 0 の場合は attribution の欠如ではなく
+            単に昇格がなかっただけ。
+
+        consecutive_zero_adoption_window:
+          status: "reserved for /0.2"
+          description: >
+            attribution_adoption_rate == 0.0 (not null) が N サイクル連続した場合に
+            F-021_NO_ATTRIBUTED_PROMOTIONS を発行するための窓。
+            /0.1 では追跡しない。実装の準備として this_cycle_promoted_count と
+            attributed_promotion_count が ProofSummary に記録されていれば
+            /0.2 での窓計算は後付け可能。
+
+    - step: 4
+      name: "MorningDisplay assembly (zero IF in renderer)"
+      description: >
+        buildMorningDisplay() を呼び出す。
+        全ての条件分岐はここで解決され、レンダラーは IF を持たない。
+        show_* フラグは全て boolean として確定する。
+      gate_type: DETERMINISTIC
+
+    - step: 5
+      name: "MorningResult write to run_dir"
+      description: >
+        aggregateMorningResult(pack, config) が morning_result.json を
+        run_dir に書き込む。
+        validateMorningResultShell(raw) でシェル検証を行い、
+        エラーがあれば loop_run_record.errors[] に追記する
+        (非致命的 — AGGREGATING は常に完了する)。
+      actions:
+        - aggregateMorningResult
+        - validate_morning_result_shell
+
+  on_aggregate_success:
+    transition: OBSERVING
+    description: >
+      morning_result が run_dir に書き込まれたら OBSERVING に遷移する。
+      CRITICAL tier でも、promoted_count == 0 でも、OBSERVING に戻る。
+
+  on_aggregate_error:
+    description: >
+      aggregateMorningResult が例外を投げた場合。
+      safe-fail: loop_run_record.completed = false として記録し、
+      それでも OBSERVING に遷移する (ループを止めない)。
+    actions:
+      - "record error to loop_run_record.error_log"
+    transition: OBSERVING
+
+# ---------------------------------------------------------------------------
+# 将来バージョンのための予約事項 (/0.2 以降)
+# ---------------------------------------------------------------------------
+
+future_versions:
+  "0.2":
+    candidates:
+      - id: F-021_NO_ATTRIBUTED_PROMOTIONS
+        description: >
+          複数サイクルにわたって昇格が発生したにもかかわらず attribution が
+          ゼロのままであることを検出する失敗コード。
+          GuardianReport.active_failure_codes に追加し AMBER 相当シグナルを出す。
+        trigger:
+          window_cycles: 5
+          condition:
+            # 窓内の昇格総数が 3 以上 (昇格が少ない週の誤爆を防ぐ閾値)
+            sum_this_cycle_promoted_count: ">= 3"
+            # 窓内の attribution 付き昇格がゼロ
+            sum_attributed_promotion_count: "== 0"
+          rationale: >
+            sum_this_cycle_promoted_count >= 3 の条件により、昇格が
+            1〜2 件しか無かった週（昇格活動が低調なだけ）と
+            昇格は活発だが attribution が埋まっていない週を区別できる。
+            this_cycle_promoted_count == 0 の日は窓集計には含めるが
+            failure 判定の主因にはならない（attribution の問題ではないため）。
+        data_already_available:
+          - "ProofSummary.this_cycle_promoted_count  (/0.1 から存在)"
+          - "ProofSummary.attributed_promotion_count (/0.1 から存在)"
+        prerequisite: >
+          attribution_adoption_rate のベースライン観測 (最低 10 サイクル)。
+          ベースラインが確定してから window_cycles と sum 閾値を調整すること。
+        emit_to_ledger: "未決定 (/0.2 で判断)"
+
+      - id: attribution_completeness_score
+        description: >
+          has_attribution (二値) の代わりに PatchAttribution の構成要素ごとの
+          充足度を [0.0, 1.0] で表す補助指標。
+          attribution_adoption_rate が二値的 (0 or 1) になっている場合に有用。
+        axes:
+          fulfills_invariant_ids_depth:
+            weight: 0.40
+            scoring: "1件 → 0.20, 2件以上 → 0.40"
+            rationale: "多くの invariant を正当化するパッチは証明が厚い"
+          seed_type_centrality:
+            weight: 0.35
+            scoring: "invariant_stress → 0.35, その他 → 0.20"
+            rationale: "中心的な FocusSeed から派生した attribution は信頼性が高い"
+          observation_ref_precision:
+            weight: 0.25
+            scoring: "':' 区切りで error_code まで含む → 0.25, ファイル名のみ → 0.10"
+            rationale: "参照精度が高いほど事実トレーサビリティが明確"
+        prerequisite: >
+          /0.1 の has_attribution 一発判定で attribution_adoption_rate が
+          0 と 1 の間の値域で安定しないことが観測されてから実装する。
+          10 サイクル以上の観測データが必要。
+          Phase A プロンプト側で fulfills_invariant_ids >= 2 を入力制約として
+          先に強制できるなら、このスコア追加は不要になる可能性がある。
+        status: "観測フェーズ待ち (/0.2 以降で判断)"

@@ -1,0 +1,22 @@
+id: "INV-PHASE14-01"
+slug: "classify_rejection_no_silent_discard"
+failure_code: null
+severity: HIGH
+non_waivable: false
+
+statement: >
+  Every rejected patch candidate MUST be classified with an explicit
+  RejectionClass.  Silent discards — candidates that disappear from the
+  pipeline without a RejectedPatch record — are prohibited.
+  governance_weekly.py must emit a classification for every input it receives.
+
+detection:
+  method: audit_log_check
+  check: "every_input_candidate_has_a_matching_rejected_or_verified_record"
+  silent_discard_defined_as: "candidate_id appears in input but not in output"
+
+enforcement:
+  phase: "B"
+  gate: "post_batch_audit"
+  action: "fail_batch_and_operator_alert"
+  related_file: "phase14/src/phase14/governance_weekly.py"

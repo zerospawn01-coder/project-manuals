@@ -1,0 +1,20 @@
+id: "INV-003"
+slug: "no_context_regression"
+failure_code: "F-003_CONTEXT_REGRESSION"
+severity: CRITICAL
+non_waivable: true
+
+statement: >
+  No AI-generated patch may cause any previously-passing regression test to
+  fail.  A regression is defined as a test that was in the PASS state in the
+  cycle immediately before this patch was applied.
+
+detection:
+  method: sandbox_test_run
+  reject_on: "any_previously_passing_test_fails"
+
+enforcement:
+  phase: "B"
+  gate: "no_regression"
+  action: "reject_and_ledger_write"
+  block_code: "PROMOTION_GATE_FAIL"

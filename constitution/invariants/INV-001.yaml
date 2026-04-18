@@ -1,0 +1,25 @@
+id: "INV-001"
+slug: "no_security_downgrade"
+failure_code: "F-001_SECURITY_DOWNGRADE"
+severity: CRITICAL
+non_waivable: true
+
+statement: >
+  No AI-generated patch may remove, weaken, or bypass any security control —
+  including but not limited to: authentication gates, authorization checks,
+  cryptographic verification, audit log writes, and approval token validation.
+
+detection:
+  method: static_analysis
+  patterns:
+    - "removes auth check"
+    - "skips approval token"
+    - "disables audit log"
+    - "hardcodes secret"
+  reject_on_match: true
+
+enforcement:
+  phase: "B"
+  gate: "invariant_check"
+  action: "reject_and_ledger_write"
+  block_code: "INV_VIOLATION_REJECT"

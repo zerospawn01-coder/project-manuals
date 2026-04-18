@@ -374,6 +374,72 @@ export interface NegativeConstraintViolation {
   reason: string;
 }
 
+// ---------------------------------------------------------------------------
+// PatchAttribution — PMI/GD&T 対応層
+// "なぜこのパッチが必要か" の根拠をパッチオブジェクト自体に埋め込む。
+//
+// 設計原則:
+//   - 「壊さない」証明 (invariant_check) とは独立した正方向トレーサビリティ。
+//   - observation_ref は事実参照のみ。主観的評価は禁止。
+//   - fulfills_invariant_ids は non-empty tuple — 省略不可。
+//     0件の候補は「何のためのパッチか不明」と等価。
+// ---------------------------------------------------------------------------
+
+export interface PatchAttributionRationale {
+  /**
+   * 起点となった観測の識別子。
+   * InvariantStressSeed → invariant_id、ErrorLogSeed → source_file:error_code 等。
+   * 主観的評価ではなく事実参照に固定するための強制参照フィールド。
+   */
+  observation_ref: string;
+
+  /**
+   * 1文、動詞始まり必須。例: "Reduces auth timeout latency by eliminating serial lock"
+   * "Eliminates", "Reduces", "Restores", "Prevents" 等の動詞で開始すること。
+   * "Probably better" / "feels faster" 等の主観表現は schema-invalid。
+   */
+  expected_effect: string;
+
+  /**
+   * このパッチが REJECTED された場合のフォールバック挙動。
+   *   skip      — このサイクルではスキップして次の候補へ
+   *   escalate  — DEFERRED_HUMAN キューに積んで人間判断を待つ
+   *   rollback  — 直前の promoted skill を rollback_executor で巻き戻す
+   */
+  fallback_if_rejected: 'skip' | 'escalate' | 'rollback';
+}
+
+export interface PatchAttribution {
+  /** どの FocusSeed が起点か（観測種別 + 識別子） */
+  derived_from_seed: {
+    seed_type: FocusSeed['seed_type'];
+    /**
+     * seed 固有の識別子。
+     * invariant_stress → invariant_id
+     * error_log        → source_file (+ optionally ":error_code")
+     * slow_workflow    → workflow_id
+     * flaky_regression → test_id
+     */
+    observation_ref: string;
+  };
+
+  /**
+   * このパッチが「満たすため」に生成された不変条件 ID のリスト。
+   * Non-empty tuple。0件は schema-invalid (→ pre-TESTING gate で REJECTED)。
+   * "壊さない" の acceptance_criteria.invariant_check とは異なる正方向の主張。
+   */
+  fulfills_invariant_ids: [string, ...string[]];
+
+  /** 事実ベースの根拠。主観表現禁止。 */
+  rationale: PatchAttributionRationale;
+
+  /**
+   * 生成時点の constitution_layer schema_version。
+   * 変更管理: 要求 → パッチ → 採択の鎖で変更追跡の鍵になる。
+   */
+  constitution_snapshot_version: string;
+}
+
 export interface PatchCandidate {
   candidate_id: string;   // UUID assigned by the generator
   generated_at: string;   // ISO-8601 UTC
@@ -412,6 +478,16 @@ export interface PatchCandidate {
    * Must be empty for the candidate to pass the pre-TESTING gate.
    */
   negative_constraint_violations: NegativeConstraintViolation[];
+
+  /**
+   * Attribution — PMI/GD&T 対応層。
+   * v0.1 ルーティング規則 (Phase B evaluation_sequence step 0 で評価):
+   *   - 欠損 + blast_radius=SELF   → 通過 (影響範囲が自己完結)
+   *   - 欠損 + blast_radius=TENANT → disposition='DEFERRED_HUMAN' (F-020)
+   *   - 欠損 + blast_radius=GLOBAL → L1-D で HARD_REJECT (attribution 以前)
+   * v0.2 以降で全 blast_radius で必須化を検討。
+   */
+  attribution?: PatchAttribution;
 }
 
 /**

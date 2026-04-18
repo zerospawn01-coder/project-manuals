@@ -1,0 +1,108 @@
+name: Auto-Merge
+
+# Automatically merges PRs when all required CI checks pass.
+# Conditions:
+#   - All jobs in ci.yml must be green (enforced by branch protection)
+#   - PR label "auto-merge" OR PR author is the repo bot/owner
+#   - Does NOT bypass CODEOWNERS review on constitution/** paths
+
+on:
+  # Trigger when the gate job finishes
+  workflow_run:
+    workflows: ["CI Gate"]
+    types: [completed]
+
+  # Also trigger when a PR is labeled (manual opt-in)
+  pull_request:
+    types: [labeled]
+
+jobs:
+  auto-merge:
+    name: "auto-merge on gate PASS"
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    # Only proceed if:
+    #   - Triggered by workflow_run AND the CI gate passed, OR
+    #   - A PR was labeled "auto-merge"
+    if: |
+      (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success') ||
+      (github.event_name == 'pull_request' && github.event.label.name == 'auto-merge')
+
+    permissions:
+      contents: write
+      pull-requests: write
+
+    steps:
+      - name: Resolve PR number from workflow_run event
+        if: github.event_name == 'workflow_run'
+        id: resolve-pr
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SHA: ${{ github.event.workflow_run.head_sha }}
+          REPO: ${{ github.repository }}
+        run: |
+          PR=$(gh pr list --repo "$REPO" --state open --json number,headRefOid \
+               --jq ".[] | select(.headRefOid == \"$SHA\") | .number" | head -1)
+          echo "pr_number=$PR" >> "$GITHUB_OUTPUT"
+
+      - name: Check PR mergeability and constitution paths
+        id: pr-checks
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_WF: ${{ steps.resolve-pr.outputs.pr_number }}
+          PR_LABEL: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+        run: |
+          PR="${PR_WF:-$PR_LABEL}"
+          if [ -z "$PR" ]; then
+            echo "No PR resolved — skipping"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # Check merge state — block on DIRTY (conflicts) or BLOCKED (missing reviews/checks)
+          MERGE_STATE=$(gh pr view "$PR" --repo "$REPO" --json mergeStateStatus \
+            --jq .mergeStateStatus 2>/dev/null || echo "UNKNOWN")
+          echo "PR #$PR merge state: $MERGE_STATE"
+          if [ "$MERGE_STATE" = "DIRTY" ]; then
+            echo "PR has merge conflicts (state: DIRTY) — skipping auto-merge"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # Detect constitution paths — auto-merge proceeds but CODEOWNERS blocks it
+          # until human review is complete (branch protection enforced)
+          HAS_CONSTITUTION=$(gh pr view "$PR" --repo "$REPO" --json files \
+            --jq '[.files[].path] | map(select(
+              startswith("constitution/") or
+              . == ".agent.md" or
+              startswith(".github/CODEOWNERS")
+            )) | length > 0' 2>/dev/null || echo "false")
+          if [ "$HAS_CONSTITUTION" = "true" ]; then
+            echo "PR touches constitution/** paths — auto-merge queued, awaiting CODEOWNERS review"
+          fi
+
+          echo "skip=false" >> "$GITHUB_OUTPUT"
+
+      - name: Enable auto-merge (squash) — workflow_run trigger
+        if: github.event_name == 'workflow_run' && steps.resolve-pr.outputs.pr_number != '' && steps.pr-checks.outputs.skip != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR: ${{ steps.resolve-pr.outputs.pr_number }}
+          REPO: ${{ github.repository }}
+        run: |
+          echo "Enabling auto-merge for PR #$PR in $REPO"
+          gh pr merge "$PR" --repo "$REPO" --auto --squash \
+            --subject "$(gh pr view $PR --repo $REPO --json title --jq .title) [auto-merged]"
+
+      - name: Enable auto-merge (squash) — labeled trigger
+        if: github.event_name == 'pull_request' && steps.pr-checks.outputs.skip != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+        run: |
+          echo "Label 'auto-merge' detected. Enabling auto-merge for PR #$PR"
+          gh pr merge "$PR" --repo "$REPO" --auto --squash \
+            --subject "$(gh pr view $PR --repo $REPO --json title --jq .title) [auto-merged]"
