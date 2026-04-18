@@ -241,6 +241,16 @@ failure_codes:
     ledger_write: required
     auto_merge_block: true
 
+  - code: "F-020_ATTRIBUTION_MISSING"
+    maps_to_invariant: "INV-PHASE14-01"
+    ledger_write: required
+    auto_merge_block: false   # deferred to human review, not hard-blocked
+
+  - code: "F-020"
+    maps_to_invariant: "INV-PHASE14-01"
+    ledger_write: required
+    auto_merge_block: false
+
 # ------------------------------------------------------------------------------
 # Part V — Promotion Gate
 # A patch may only be PROMOTED when ALL of the following hold.
