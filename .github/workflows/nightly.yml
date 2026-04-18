@@ -1,0 +1,319 @@
+name: Nightly Repo Caretaker
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Runs every night at 03:00 JST (18:00 UTC previous day).
+# Manual trigger available via workflow_dispatch.
+#
+# 3-layer execution:
+#   Layer 1 (observe):  repo_caretaker --json  → morning_report.jsonl
+#   Layer 2 (act):      parse SAFE_AUTO_PR findings → create PRs where eligible
+#   Layer 3 (explain):  upload morning_report artifact
+#
+# Safe-fail contract:
+#   This workflow NEVER pushes to main directly.
+#   It only creates Draft PRs (--draft flag) on SELF-tier repos.
+#   TENANT-tier findings are logged but no auto-action is taken.
+#   HUMAN_REVIEW findings are written to morning report only.
+#
+# Cross-repo auth contract:
+#   repo_caretaker.ts reads CI/PR state across multiple repositories.
+#   Use CARETAKER_GH_TOKEN (PAT or GitHub App token) with cross-repo read.
+#   GITHUB_TOKEN (repo-scoped) is insufficient for org-wide observation.
+# ─────────────────────────────────────────────────────────────────────────────
+
+on:
+  schedule:
+    # 18:00 UTC = 03:00 JST
+    - cron: '0 18 * * *'
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Dry run (observe + classify, no PRs created)'
+        type: boolean
+        default: false
+
+concurrency:
+  group: nightly-caretaker
+  cancel-in-progress: false   # Never cancel in-flight nightly run
+
+jobs:
+
+  # ───────────────────────────────────────────────────────────────────────────
+  # Job 1: caretaker-observe
+  # Runs all 3 layers, writes morning report, uploads artifact
+  # ───────────────────────────────────────────────────────────────────────────
+  caretaker-observe:
+    name: "caretaker / observe + classify"
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    permissions:
+      contents: read
+      pull-requests: read
+
+    outputs:
+      report_path:       ${{ steps.observe.outputs.report_path }}
+      safe_pr_count:     ${{ steps.observe.outputs.safe_pr_count }}
+      human_review_count: ${{ steps.observe.outputs.human_review_count }}
+      cycle_date:        ${{ steps.observe.outputs.cycle_date }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build
+        run: ./node_modules/.bin/tsc
+
+      - name: Validate cross-repo auth token
+        env:
+          GH_TOKEN: ${{ secrets.CARETAKER_GH_TOKEN }}
+        run: |
+          if [ -z "$GH_TOKEN" ]; then
+            echo "::error::Missing CARETAKER_GH_TOKEN secret (required for cross-repo observation)."
+            exit 1
+          fi
+
+          gh auth status >/dev/null 2>&1 || {
+            echo "::error::gh auth status failed with CARETAKER_GH_TOKEN"
+            exit 1
+          }
+
+          # Probe at least one external repo to avoid silent all-skipped runs
+          gh run list \
+            --repo zerospawn01-coder/aesthetic-resonator \
+            --limit 1 \
+            --json databaseId >/dev/null 2>&1 || {
+              echo "::error::Caretaker token cannot read external repos; cross-repo observe would silently skip."
+              exit 1
+            }
+
+      - name: Run caretaker (Layer 1+2+3)
+        id: observe
+        env:
+          GH_TOKEN: ${{ secrets.CARETAKER_GH_TOKEN }}
+          DRY_RUN_FLAG: ${{ inputs.dry_run == true && '--dry-run' || '' }}
+        run: |
+          CYCLE_DATE=$(date '+%Y-%m-%d')
+          echo "cycle_date=$CYCLE_DATE" >> "$GITHUB_OUTPUT"
+
+          # Run caretaker — always exits 0
+          node dist/tools/repo_caretaker.js --json $DRY_RUN_FLAG \
+            > /tmp/morning_report.json
+
+          # Extract summary fields for downstream use
+          SAFE_COUNT=$(node -e "
+            const r = JSON.parse(require('fs').readFileSync('/tmp/morning_report.json', 'utf8'));
+            console.log(r.summary.safe_auto_pr_count ?? 0);
+          ")
+          HUMAN_COUNT=$(node -e "
+            const r = JSON.parse(require('fs').readFileSync('/tmp/morning_report.json', 'utf8'));
+            console.log(r.summary.human_review_count ?? 0);
+          ")
+
+          echo "safe_pr_count=$SAFE_COUNT"     >> "$GITHUB_OUTPUT"
+          echo "human_review_count=$HUMAN_COUNT" >> "$GITHUB_OUTPUT"
+          echo "report_path=/tmp/morning_report.json" >> "$GITHUB_OUTPUT"
+
+          # Print human-readable summary
+          node dist/tools/repo_caretaker.js $DRY_RUN_FLAG
+
+      - name: Copy report into repo data dir (for ledger)
+        if: inputs.dry_run != true
+        env:
+          CYCLE_DATE: ${{ steps.observe.outputs.cycle_date }}
+        run: |
+          mkdir -p phase14/data/morning_reports
+          cp /tmp/morning_report.json \
+            "phase14/data/morning_reports/${CYCLE_DATE}.json"
+
+      - name: Upload morning report artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: morning-report-${{ steps.observe.outputs.cycle_date }}
+          path: /tmp/morning_report.json
+          retention-days: 30
+
+  # ───────────────────────────────────────────────────────────────────────────
+  # Job 2: caretaker-act
+  # Creates Draft PRs for SAFE_AUTO_PR findings on SELF-tier repos only
+  # ───────────────────────────────────────────────────────────────────────────
+  caretaker-act:
+    name: "caretaker / act (auto-PR eligible findings)"
+    needs: caretaker-observe
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    # Only run when there are safe findings and not in dry-run mode
+    if: needs.caretaker-observe.outputs.safe_pr_count > 0 && inputs.dry_run != true
+
+    permissions:
+      contents: write
+      pull-requests: write
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Download morning report
+        uses: actions/download-artifact@v4
+        with:
+          name: morning-report-${{ needs.caretaker-observe.outputs.cycle_date }}
+          path: /tmp/
+
+      - name: Process SAFE_AUTO_PR findings
+        env:
+          GH_TOKEN:   ${{ secrets.GITHUB_TOKEN }}
+          REPO:       ${{ github.repository }}
+          CYCLE_DATE: ${{ needs.caretaker-observe.outputs.cycle_date }}
+          GIT_USER:   'github-actions[bot]'
+          GIT_EMAIL:  'github-actions[bot]@users.noreply.github.com'
+        run: |
+          git config user.name  "$GIT_USER"
+          git config user.email "$GIT_EMAIL"
+
+          # Extract SAFE_AUTO_PR classifications for SELF-tier repo (project-manuals only)
+          SAFE_CLASSIFICATIONS=$(node -e "
+            const r = JSON.parse(require('fs').readFileSync('/tmp/morning_report.json','utf8'));
+            const safe = r.classifications.filter(c =>
+              c.decision === 'SAFE_AUTO_PR' &&
+              c.blast_radius === 'SELF' &&
+              c.fix_hint?.action === 'CREATE_BRANCH_AND_PR'
+            );
+            console.log(JSON.stringify(safe));
+          ")
+
+          echo "Safe classifications: $SAFE_CLASSIFICATIONS"
+          SAFE_COUNT=$(echo "$SAFE_CLASSIFICATIONS" | node -e "
+            const d = JSON.parse(require('fs').readFileSync('/dev/stdin','utf8'));
+            console.log(d.length);
+          ")
+
+          echo "Eligible auto-PR findings: $SAFE_COUNT"
+          if [ "$SAFE_COUNT" = "0" ]; then
+            echo "No CREATE_BRANCH_AND_PR findings for SELF repo — nothing to do."
+            exit 0
+          fi
+
+          # For each eligible finding, create a caretaker branch + Draft PR
+          echo "$SAFE_CLASSIFICATIONS" | node -e "
+            const items = JSON.parse(require('fs').readFileSync('/dev/stdin','utf8'));
+            items.forEach((c, i) => {
+              process.stdout.write(c.fix_hint.branch_name + '\n');
+              process.stdout.write(c.type + '\n');
+              process.stdout.write((c.fix_hint.description || 'Caretaker auto-fix') + '\n');
+            });
+          " | while IFS= read -r BRANCH && IFS= read -r FINDING_TYPE && IFS= read -r DESC; do
+            echo "→ Creating caretaker branch: $BRANCH"
+
+            # Skip if branch already exists
+            if git ls-remote --heads origin "$BRANCH" | grep -q "$BRANCH"; then
+              echo "  Branch $BRANCH already exists — skipping"
+              continue
+            fi
+
+            git checkout -b "$BRANCH"
+
+            # Record the caretaker intent: append to morning report ledger
+            cat >> "phase14/data/morning_reports/caretaker_actions.jsonl" <<EOF
+          {"ts":"$(date -u +%Y-%m-%dT%H:%M:%SZ)","cycle":"$CYCLE_DATE","branch":"$BRANCH","type":"$FINDING_TYPE","desc":"$DESC"}
+          EOF
+
+            git add "phase14/data/morning_reports/caretaker_actions.jsonl" 2>/dev/null || true
+
+            if git diff --cached --quiet; then
+              echo "  No staged changes — skipping PR for $BRANCH"
+              git checkout -
+              git branch -D "$BRANCH"
+              continue
+            fi
+
+            git commit -m "caretaker($FINDING_TYPE): $DESC [cycle $CYCLE_DATE]"
+            git push origin "$BRANCH"
+
+            gh pr create \
+              --repo "$REPO" \
+              --base main \
+              --head "$BRANCH" \
+              --draft \
+              --title "caretaker: $FINDING_TYPE — $CYCLE_DATE" \
+              --body "**Type**: \`$FINDING_TYPE\`
+          **Cycle**: $CYCLE_DATE
+          **Description**: $DESC
+
+          ---
+          _Auto-generated by Nightly Repo Caretaker._
+          _Blast radius: SELF. Review before merging._"
+
+            git checkout -
+          done
+
+  # ───────────────────────────────────────────────────────────────────────────
+  # Job 3: caretaker-explain
+  # Prints final morning summary — runs regardless of act job status
+  # ───────────────────────────────────────────────────────────────────────────
+  caretaker-explain:
+    name: "caretaker / explain (morning summary)"
+    needs: [caretaker-observe, caretaker-act]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    if: always()
+
+    steps:
+      - name: Download morning report
+        uses: actions/download-artifact@v4
+        with:
+          name: morning-report-${{ needs.caretaker-observe.outputs.cycle_date }}
+          path: /tmp/
+        continue-on-error: true
+
+      - name: Print morning summary
+        env:
+          SAFE_COUNT:   ${{ needs.caretaker-observe.outputs.safe_pr_count }}
+          HUMAN_COUNT:  ${{ needs.caretaker-observe.outputs.human_review_count }}
+          CYCLE_DATE:   ${{ needs.caretaker-observe.outputs.cycle_date }}
+          ACT_RESULT:   ${{ needs.caretaker-act.result }}
+        run: |
+          echo "╔══════════════════════════════════════════════════════════════╗"
+          echo "║  Nightly Repo Caretaker — Morning Report  $CYCLE_DATE     ║"
+          echo "╚══════════════════════════════════════════════════════════════╝"
+          echo ""
+          echo "  auto-PR candidates   : $SAFE_COUNT"
+          echo "  human review needed  : $HUMAN_COUNT"
+          echo "  act job result       : ${ACT_RESULT:-skipped}"
+          echo ""
+
+          if [ -f /tmp/morning_report.json ]; then
+            node -e "
+              const r = JSON.parse(require('fs').readFileSync('/tmp/morning_report.json','utf8'));
+              const { summary, classifications } = r;
+              console.log('  repos observed : ' + summary.repos_observed + ' (skipped: ' + summary.repos_skipped + ')');
+              console.log('  total findings : ' + summary.findings_total);
+              console.log('');
+              const human = classifications.filter(c => c.decision === 'HUMAN_REVIEW');
+              if (human.length > 0) {
+                console.log('  ⚠ Requires human review:');
+                human.forEach(c => console.log('    [' + c.repo + '] ' + c.type + ' — ' + c.reason));
+              }
+              const deferred = classifications.filter(c => c.decision === 'DEFER');
+              if (deferred.length > 0) {
+                console.log('  → Deferred to next cycle: ' + deferred.length + ' finding(s)');
+              }
+            "
+          else
+            echo "  (morning report artifact unavailable)"
+          fi

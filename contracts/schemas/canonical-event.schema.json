@@ -1,0 +1,55 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://project-manuals/schemas/canonical-event.schema.json",
+  "title": "CanonicalEvent",
+  "description": "A canonical ledger event. All events appended to *.audit.jsonl files MUST conform to this schema.",
+  "type": "object",
+  "required": ["event_id", "event_type", "source", "timestamp_iso8601", "payload"],
+  "additionalProperties": false,
+  "properties": {
+    "event_id": {
+      "type": "string",
+      "pattern": "^EVT-[0-9]{14}-[A-Z0-9]{8}$",
+      "description": "Globally unique event ID. Format: EVT-YYYYMMDDHHmmSS-XXXXXXXX"
+    },
+    "event_type": {
+      "type": "string",
+      "enum": [
+        "INVARIANT_VIOLATED",
+        "INVARIANT_CHECKED_PASS",
+        "CANDIDATE_PROMOTED",
+        "CANDIDATE_REJECTED",
+        "CANDIDATE_DEFERRED",
+        "PHASE_STARTED",
+        "PHASE_COMPLETED",
+        "OPERATOR_OVERRIDE",
+        "SCHEMA_VALIDATION_FAILED",
+        "TELEMETRY_RECORDED",
+        "ESCALATION_TRIGGERED"
+      ]
+    },
+    "source": {
+      "type": "string",
+      "description": "Component that emitted this event (e.g. phase14_live_fire, verify_constitution)."
+    },
+    "timestamp_iso8601": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "payload": {
+      "type": "object",
+      "description": "Event-specific data. Shape depends on event_type.",
+      "additionalProperties": true
+    },
+    "correlation_id": {
+      "type": "string",
+      "description": "Links this event to a run_id, trace_id, or decision_id."
+    },
+    "schema_version": {
+      "type": "string",
+      "pattern": "^[0-9]+\\.[0-9]+$",
+      "default": "1.0",
+      "description": "Schema version used when this event was written."
+    }
+  }
+}

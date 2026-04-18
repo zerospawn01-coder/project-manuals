@@ -1,0 +1,260 @@
+# Antigravity OS — Constitution v1.0
+# ==============================================================================
+# IMMUTABLE: Changes to this file require explicit human approval.
+# See CODEOWNERS: constitution/* @zerospawn01-coder
+#
+# Purpose:
+#   Define the non-negotiable constraints under which the OS may autonomously
+#   generate, verify, and promote code changes.  Any AI-generated action that
+#   would violate these constraints MUST be rejected at the Gateway — not
+#   logged, not deferred: fail-closed.
+#
+# This document is machine-readable.  tools/verify_constitution.ts validates
+# that runtime behavior is consistent with every rule declared here.
+# ==============================================================================
+
+version: "1.0"
+effective_date: "2026-04-09"
+binding_on:
+  - runtime/gateway
+  - runtime/pipeline
+  - adapters/copilot
+  - adapters/telemetry
+
+# ------------------------------------------------------------------------------
+# Part I — Inviolable Invariants
+# Each invariant is defined in constitution/invariants/<id>.yaml
+# ------------------------------------------------------------------------------
+invariants:
+  registry:
+    - id: "INV-001"
+      slug: "no_security_downgrade"
+      severity: CRITICAL
+      file: "constitution/invariants/INV-001.yaml"
+
+    - id: "INV-002"
+      slug: "no_dependency_ignore_delete"
+      severity: CRITICAL
+      file: "constitution/invariants/INV-002.yaml"
+
+    - id: "INV-003"
+      slug: "no_context_regression"
+      severity: CRITICAL
+      file: "constitution/invariants/INV-003.yaml"
+
+    - id: "INV-004"
+      slug: "no_metric_inflation"
+      severity: CRITICAL
+      file: "constitution/invariants/INV-004.yaml"
+
+    - id: "INV-009"
+      slug: "measurement_env_valid"
+      severity: HIGH
+      file: "constitution/invariants/INV-009.yaml"
+
+    - id: "INV-010"
+      slug: "no_silent_drift"
+      severity: HIGH
+      file: "constitution/invariants/INV-010.yaml"
+
+    - id: "INV-PHASE14-L3"
+      slug: "l3_readiness_gate"
+      severity: HIGH
+      file: "constitution/invariants/INV-PHASE14-L3.yaml"
+
+    - id: "INV-PHASE14-01"
+      slug: "classify_rejection_no_silent_discard"
+      severity: HIGH
+      file: "constitution/invariants/INV-PHASE14-01.yaml"
+
+  # Any invariant listed as "non_waivable" can NEVER be suppressed by config.
+  non_waivable:
+    - "INV-001"
+    - "INV-002"
+    - "INV-003"
+
+# ------------------------------------------------------------------------------
+# Part II — Trust Boundary Rules
+# ------------------------------------------------------------------------------
+trust_boundaries:
+  untrusted:
+    - "adapters/**"
+    - "renderer-react/**"
+    - "peripherals/**"
+
+  controlled:
+    - "runtime/**"
+    - "tools/**"
+    - "hub/**"
+
+  sovereign:            # write-protected — human review required
+    - "constitution/**"
+    - "contract/**"
+    - "contracts/**"
+
+  append_only:          # never overwrite; only append
+    - "phase14/data/ledger/**"
+    - "logs/**"
+
+# ------------------------------------------------------------------------------
+# Part III — AI Generation Constraints (also see .agent.md)
+# ------------------------------------------------------------------------------
+ai_generation:
+  # Gateway: every Copilot/LLM-generated patch MUST pass these before merge.
+  required_gates:
+    - "schema_validation"
+    - "invariant_check"
+    - "trust_boundary_check"
+    - "telemetry_consistency"
+
+  # Copilot (or any AI) is PROHIBITED from writing to these paths directly.
+  # Writes must flow through the Gateway (Phase B sandbox).
+  prohibited_direct_write:
+    - "constitution/**"
+    - "contract/**"
+    - "contracts/**"
+    - "phase14/data/ledger/**"
+    - ".github/CODEOWNERS"
+
+  # Auto-merge is only permitted for Draft PRs created by the OS promotion
+  # pipeline AND only after all required_gates pass.
+  auto_merge_allowed: false
+  draft_pr_allowed: true
+
+# ------------------------------------------------------------------------------
+# Part IV — Failure Codes (canonical registry)
+# These codes are the ONLY valid values for FailureLedgerCode in the runtime.
+# ------------------------------------------------------------------------------
+failure_codes:
+  - code: "F-001_SECURITY_DOWNGRADE"
+    maps_to_invariant: "INV-001"
+    ledger_write: required
+    auto_merge_block: true
+
+  - code: "F-002_DEPENDENCY_IGNORE_DELETE"
+    maps_to_invariant: "INV-002"
+    ledger_write: required
+    auto_merge_block: true
+
+  - code: "F-003_CONTEXT_REGRESSION"
+    maps_to_invariant: "INV-003"
+    ledger_write: required
+    auto_merge_block: true
+
+  - code: "F-004_METRIC_INFLATION"
+    maps_to_invariant: "INV-004"
+    ledger_write: required
+    auto_merge_block: true
+
+  - code: "F-009_MEASUREMENT_ENV_INVALID"
+    maps_to_invariant: "INV-009"
+    ledger_write: conditional   # only when pattern_count >= 3
+    auto_merge_block: false
+
+  - code: "F-010_SILENT_DRIFT"
+    maps_to_invariant: "INV-010"
+    ledger_write: required
+    auto_merge_block: true
+
+  - code: "F-005_BENCHMARK_PATH_WRITE"
+    maps_to_invariant: "INV-005"
+    ledger_write: required
+    auto_merge_block: true
+
+  - code: "F-006_SELF_REPORTED_METRIC"
+    maps_to_invariant: "INV-006"
+    ledger_write: required
+    auto_merge_block: true
+
+  - code: "F-007_SINGLE_SAMPLE_PROMOTION"
+    maps_to_invariant: "INV-007"
+    ledger_write: required
+    auto_merge_block: true
+
+  - code: "F-008_HASH_MISMATCH_REPLAY"
+    maps_to_invariant: "INV-008"
+    ledger_write: required
+    auto_merge_block: true
+
+  - code: "F-011_STATE_LOSS_ON_RESTART"
+    maps_to_invariant: "INV-011"
+    ledger_write: required
+    auto_merge_block: true
+
+  - code: "F-011"
+    maps_to_invariant: "INV-011"
+    ledger_write: required
+    auto_merge_block: true
+
+  - code: "F-012_PARTIAL_APPLY_SPLIT"
+    maps_to_invariant: "INV-012"
+    ledger_write: required
+    auto_merge_block: true
+
+  - code: "F-013_MISSING_RESTORE_POINT"
+    maps_to_invariant: "INV-013"
+    ledger_write: required
+    auto_merge_block: true
+
+  - code: "F-014_SANDBOX_EGRESS_VIOLATION"
+    maps_to_invariant: "INV-014"
+    ledger_write: required
+    auto_merge_block: true
+
+  - code: "F-015_NONDETERMINISTIC_PATCH"
+    maps_to_invariant: "INV-015"
+    ledger_write: required
+    auto_merge_block: true
+
+  - code: "F-016_AUDIT_LOG_DEGRADATION"
+    maps_to_invariant: "INV-016"
+    ledger_write: required
+    auto_merge_block: true
+
+  - code: "F-016"
+    maps_to_invariant: "INV-016"
+    ledger_write: required
+    auto_merge_block: true
+
+  - code: "F-017_REJECTION_REASON_INVISIBLE"
+    maps_to_invariant: "INV-017"
+    ledger_write: required
+    auto_merge_block: true
+
+  - code: "F-018_CONSTITUTIONAL_BYPASS"
+    maps_to_invariant: "INV-018"
+    ledger_write: required
+    auto_merge_block: true
+
+  - code: "F-018"
+    maps_to_invariant: "INV-018"
+    ledger_write: required
+    auto_merge_block: true
+
+  - code: "F-019_NEGATIVE_CONSTRAINT_IGNORED"
+    maps_to_invariant: "INV-019"
+    ledger_write: required
+    auto_merge_block: true
+
+  - code: "F-019"
+    maps_to_invariant: "INV-019"
+    ledger_write: required
+    auto_merge_block: true
+
+# ------------------------------------------------------------------------------
+# Part V — Promotion Gate
+# A patch may only be PROMOTED when ALL of the following hold.
+# ------------------------------------------------------------------------------
+promotion_gate:
+  required_sub_proofs:
+    - "invariant_check"
+    - "measurable_outcome"
+    - "no_regression"
+
+  stability_index_must_not_decrease: true
+  blast_radius_ceiling_global: false   # GLOBAL radius always rejected
+
+  # The OS must create a Draft PR — never directly commit to main.
+  output: "draft_pr"
+  target_branch: "main"
+  branch_prefix: "auto/promote/"

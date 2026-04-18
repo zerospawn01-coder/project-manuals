@@ -1,0 +1,27 @@
+# CODEOWNERS — project-manuals
+#
+# These rules enforce human review on sovereign and high-trust paths.
+# Any PR touching these files requires approval from @zerospawn01-coder
+# before it can be merged.
+#
+# Reference: constitution/constitution.v1.0.yaml trust_boundaries.sovereign
+# AI generation constraints: .agent.md
+
+# ── Sovereign: require human approval ─────────────────────────────────────
+constitution/**                  @zerospawn01-coder
+.github/CODEOWNERS               @zerospawn01-coder
+.agent.md                        @zerospawn01-coder
+
+# ── Contracts: require review ──────────────────────────────────────────────
+contracts/**                     @zerospawn01-coder
+contract/**                      @zerospawn01-coder
+
+# ── Governance tests: require review ──────────────────────────────────────
+tests/invariant/**               @zerospawn01-coder
+tests/governance/**              @zerospawn01-coder
+tests/schema/**                  @zerospawn01-coder
+
+# ── Phase14 promotion gate: require review ─────────────────────────────────
+tools/phase14_live_fire.ts       @zerospawn01-coder
+tools/verify_constitution.ts     @zerospawn01-coder
+phase14/src/phase14/governance_weekly.py  @zerospawn01-coder

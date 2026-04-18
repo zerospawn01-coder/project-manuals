@@ -379,6 +379,11 @@ export interface AssemblePhaseAInputPackOptions {
   filter?: Partial<LedgerInjectionFilterConfig>;
   max_seeds?: number;
   max_candidates?: number;
+  /**
+   * When F-010_SILENT_DRIFT is active, cap blast_radius in the LLM prompt.
+   * Passed through to PhaseAInputPack so renderSystemPrompt() can enforce it.
+   */
+  blast_radius_ceiling?: 'SELF' | 'TENANT' | 'GLOBAL' | null;
 }
 
 export function assemblePhaseAInputPack(opts: AssemblePhaseAInputPackOptions): PhaseAInputPack {
@@ -470,6 +475,7 @@ export function assemblePhaseAInputPack(opts: AssemblePhaseAInputPackOptions): P
     world_state,
     ledger_injection_filter: filter,
     max_candidates,
+    ...(opts.blast_radius_ceiling != null && { blast_radius_ceiling: opts.blast_radius_ceiling }),
   };
 
   return pack;
@@ -508,12 +514,17 @@ export function renderSystemPrompt(
         .join('\n')
     : '  (all invariants from INV-001 to INV-010)';
 
+  const blast_ceiling_line = pack.blast_radius_ceiling === 'SELF'
+    ? `'TENANT' または 'GLOBAL' に設定してはならない（SELF のみ許可 — F-010_SILENT_DRIFT 適応中）。\n     cross-module 変更が必要な場合は当該候補を discarded_candidates に移動せよ。`
+    : `'GLOBAL' に設定してはならない（TENANT以下のみ許可）。\n     cross-module 変更が必要な場合は当該候補を discarded_candidates に移動せよ。`;
+
   return system_template
     .replace('{{NEGATIVE_CONSTRAINTS_BLOCK}}', nc_block)
     .replace('{{PROTECTED_INVARIANTS_BLOCK}}', inv_block)
     .replace('{{CURRENT_STABILITY_INDEX}}', pack.objective_layer.current_stability_index.toFixed(4))
     .replace(/\{\{CURRENT_STABILITY_INDEX\}\}/g, pack.objective_layer.current_stability_index.toFixed(4))
-    .replace('{{MAX_CANDIDATES}}', String(pack.max_candidates));
+    .replace('{{MAX_CANDIDATES}}', String(pack.max_candidates))
+    .replace('{{BLAST_RADIUS_CEILING_LINE}}', blast_ceiling_line);
 }
 
 /**

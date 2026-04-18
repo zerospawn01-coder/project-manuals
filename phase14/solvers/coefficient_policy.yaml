@@ -1,0 +1,65 @@
+# coefficient_policy.yaml
+# ─────────────────────────────────────────────────────────────────────────────
+# Compiler Coefficient Governance Policy v1
+#
+# This file is the institutional constraint document for QUBO compilation.
+# Any change here changes the policy_hash, which:
+#   · invalidates all prior snapshot_hashes
+#   · is recorded permanently in QUBOProvenance.policy_snapshot_hash
+#   · is surfaced by ConstitutionalGate on any version mismatch
+#
+# To update: bump policy_version, re-sign, rebuild all affected snapshots.
+# ─────────────────────────────────────────────────────────────────────────────
+
+policy_version: "coeff-policy-1.0"
+policy_authority: "phase14-governance"
+
+# ── Hard penalty governance ───────────────────────────────────────────────────
+# P is the penalty multiplier applied to every hard constraint QUBO term.
+# A too-small P allows hard constraints to be violated at low cost.
+# A too-large P causes numerical instability in the SBM.
+hard_penalty:
+  mode: "auto"          # "auto" | "fixed"
+                        #   auto  → P = max(|soft_coef|) * auto_multiplier + 1
+                        #   fixed → P = fixed_value exactly
+  fixed_value: ~        # null; set only when mode == "fixed"
+  auto_multiplier: 2.0  # P = max(|soft_coeff|, 1) * auto_multiplier + 1
+  min: 1.0              # P < min → PolicyViolation PENALTY_BELOW_MIN
+  max: 1000.0           # P > max → PolicyViolation PENALTY_ABOVE_MAX
+
+# ── Soft coefficient governance ───────────────────────────────────────────────
+# Prevents weight inflation that would de-facto override hard constraints.
+soft_weight:
+  max_abs: 100.0        # |w| > max_abs → PolicyViolation SOFT_WEIGHT_OVERFLOW
+
+# ── Constitutional invariants ────────────────────────────────────────────────
+# Each flag below, if true, is checked at compile time.
+# Violation of any enabled invariant raises PolicyViolationError.
+invariants:
+  hard_must_dominate_soft: true   # P > max(|soft_coef|) always
+  no_negative_penalty: true       # P >= 0 always
+  penalty_finite: true            # P must be finite (not NaN or Inf)
+
+# ── Protected constraint classes ─────────────────────────────────────────────
+# These MetaConstraint types are NEVER QUBO-compiled.
+# They are institution-level instruments: checked before and after solve,
+# not penalized into the objective.
+#
+# compiler_governance.py will refuse any IR that tries to add one of these
+# as a hard or soft constraint (wrong class → PROTECTED_CLASS_MISUSE violation).
+#
+# trust_boundary    — marks the perimeter of trusted solver output
+# liability_chain   — triggers chain-of-custody attribution in the ledger
+# constitutional_invariant — I1–I7 tier; never relaxable by penalty
+# audit_required    — forces CompilerManifestLedger APPROVED event before solve
+#
+protected_classes:
+  trust_boundary:           ["TrustBoundary"]
+  liability_chain:          ["LiabilityChain"]
+  constitutional_invariant: ["AuditRequired", "FailClosed"]
+  audit_required:           ["AuditRequired", "HumanReview"]
+
+# ── Signing ───────────────────────────────────────────────────────────────────
+# Authoritative identity for this policy version.
+# In production: replace with a verifiable key fingerprint.
+signed_by: "policy-authority-phase14-v1"

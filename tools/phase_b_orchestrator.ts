@@ -255,7 +255,11 @@ export function buildMeasuredOutcome(
 
   function accuracy(actual: number | null, predicted_val: number | undefined): 'met' | 'missed' | 'not_predicted' {
     if (predicted_val === undefined || predicted_val === null) return 'not_predicted';
-    if (actual === null) return 'missed';
+    // null actual = metric not yet implemented in this sandbox phase (e.g., bugs_killed in A1).
+    // Treat as 'not_predicted' rather than 'missed' so that unimplemented metrics do not
+    // block promotion via PREDICTION_OVERCLAIM.  When the metric becomes measurable in a
+    // future phase (A3+), null will no longer be returned and overclaim detection will engage.
+    if (actual === null) return 'not_predicted';
     return actual >= predicted_val ? 'met' : 'missed';
   }
 

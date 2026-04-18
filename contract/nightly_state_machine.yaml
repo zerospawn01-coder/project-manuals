@@ -1,0 +1,561 @@
+# nightly_state_machine.yaml
+# Schema version: nightly_state_machine/0.1
+# Frozen at: 2026-04-19  (v0.1 完結 — ギャップ埋め完了)
+#
+# This file is the authoritative specification for the Antigravity OS
+# nightly execution loop.  All state transitions, guard predicates,
+# acceptance criteria (AC), and failure emissions are defined HERE.
+#
+# Runtime reads this file on startup to build the in-memory guard table.
+# On restart, TaskStateMachineRecord is loaded from disk (task_state.jsonl)
+# and execution resumes from the persisted state — no cycle is ever lost.
+#
+# ┌─────────────────────────────────────────────────────────────────────────┐
+# │  OBSERVING → HYPOTHESIZING → TESTING → PROMOTING → OBSERVING           │
+# │              ↑___________________________|                              │
+# │              (reject paths always return to OBSERVING)                  │
+# └─────────────────────────────────────────────────────────────────────────┘
+#
+# Three-layer Acceptance Criteria (AC):
+#   Layer 1 [L1] — Invariant Check   : HARD gates, evaluated BEFORE TESTING begins
+#   Layer 2 [L2] — Measurable Outcome: Statistical gates, evaluated DURING TESTING
+#   Layer 3 [L3] — No Regression     : Integrity gates, evaluated BEFORE PROMOTING
+#
+# ---------------------------------------------------------------------------
+# Action registry (アクション名 → TypeScript 実装対応表)
+# 付記: このレジストリは指针であり仕様ではない。実装者がリファクタリング時に参照すること。
+# ---------------------------------------------------------------------------
+#   persist_deferred_to_review_queue:
+#     → human_review_writer.buildReviewQueueEntries()
+#       + human_review_writer.mergeIntoReviewQueue()
+#       + HumanReviewStore.writeReviewQueue()
+#
+#   persist_attribution_to_memory:
+#     → adaptation_memory_writer.buildAdaptationMemoryEntry(
+#         ..., { attribution_snapshot: vp.source_candidate.attribution ?? null }
+#       )
+#       + AdaptationMemoryStore.appendAdaptationMemoryEntries()
+#
+#   emit_failure_code:
+#     → ledger_store.appendFailureLedgerEntry({ code, ... })
+#
+#   transition_observing:
+#     → ledger_store.saveTaskStateMachineRecord({ status: 'OBSERVING' })
+# ---------------------------------------------------------------------------
+
+schema_version: "nightly_state_machine/0.1"
+
+# ---------------------------------------------------------------------------
+# Acceptance Criteria definitions (referenced by guard blocks below)
+# ---------------------------------------------------------------------------
+
+acceptance_criteria:
+
+  layer_1_invariant:
+    id: L1
+    gate_type: HARD        # fail → HARD_REJECT, immediate halt, no appeal
+    description: >
+      Constitutional guard.  The candidate patch MUST NOT modify any governance
+      kernel component and MUST arrive via a recorded GatewayDecision(PASS).
+    checks:
+      - id: L1-A
+        description: "patch_diff MUST NOT touch any forbidden_target_substrings path"
+        predicate: "none(forbidden_target_substrings, lambda s: s in candidate.patch_diff)"
+        failure_code: F-001_SECURITY_DOWNGRADE
+
+      - id: L1-B
+        description: "patch_diff MUST NOT touch any benchmark_protected_paths"
+        predicate: "none(benchmark_protected_paths, lambda s: s in candidate.patch_diff)"
+        failure_code: F-005_BENCHMARK_PATH_WRITE
+
+      - id: L1-C
+        description: "candidate MUST have a correlated GatewayDecision record with verdict=PASS"
+        predicate: "gateway_audit_log contains entry(request_id=candidate.request_id, verdict='PASS')"
+        failure_code: F-018_CONSTITUTIONAL_BYPASS
+
+      - id: L1-D
+        description: "estimated_blast_radius MUST NOT be 'GLOBAL'"
+        predicate: "candidate.blast_radius != 'GLOBAL'"
+        failure_code: F-001_SECURITY_DOWNGRADE
+
+      - id: L1-E
+        description: "patch_diff MUST be a non-empty string"
+        predicate: "candidate.patch_diff.strip().length > 0"
+        failure_code: F-006_SELF_REPORTED_METRIC
+
+      - id: L1-F
+        description: "all active FailureLedgerEntry.negative_constraints MUST be absent from patch_diff + rationale"
+        predicate: "none(active_failure_ledger, lambda e: e.negative_constraint in (candidate.patch_diff + candidate.rationale))"
+        failure_code: F-019_NEGATIVE_CONSTRAINT_IGNORED
+
+  layer_2_measurable:
+    id: L2
+    gate_type: SOFT        # fail → DEFER/QUARANTINE, candidate may be revised
+    description: >
+      Statistical significance guard.  Benchmark results MUST be reproducible,
+      statistically reliable, and untampered with.
+    checks:
+      - id: L2-A
+        description: "benchmark confidence_weight MUST be >= 0.70"
+        predicate: "raw_bench_result.confidence_weight >= 0.70"
+        on_fail: "QUARANTINE"
+        failure_code: F-007_SINGLE_SAMPLE_PROMOTION
+
+      - id: L2-B
+        description: "repetitions MUST be >= 3"
+        predicate: "raw_bench_result.repetitions >= 3"
+        on_fail: "DEFER"
+        failure_code: F-007_SINGLE_SAMPLE_PROMOTION
+
+      - id: L2-C
+        description: "benchmark_signature MUST be identical in pre- and post-patch runs"
+        predicate: "pre_bench.benchmark_signature == post_bench.benchmark_signature"
+        on_fail: "QUARANTINE"
+        failure_code: F-008_HASH_MISMATCH_REPLAY
+
+      - id: L2-D
+        description: "measurement_env_valid MUST be true in both benchmark runs"
+        predicate: "pre_bench.measurement_env_valid AND post_bench.measurement_env_valid"
+        on_fail: "DEFER"
+        failure_code: F-009_MEASUREMENT_ENV_INVALID
+
+      - id: L2-E
+        description: "deny_external_network MUST have been true during bench subprocess execution"
+        predicate: "sandbox_config.deny_external_network != false"
+        on_fail: "QUARANTINE"
+        failure_code: F-014_SANDBOX_EGRESS_VIOLATION
+
+      - id: L2-F
+        description: "DriftMonitor trend MUST NOT be 'degrading' for monitored targets"
+        predicate: "drift_summary == null OR NOT drift_summary.any_drift_detected"
+        on_fail: "DEFER"
+        failure_code: F-010_SILENT_DRIFT
+
+  layer_3_no_regression:
+    id: L3
+    gate_type: SOFT        # fail → SOFT_REJECT, candidate returned for fix
+    description: >
+      Regression and replay integrity guard.  All existing tests MUST pass
+      and ledger replay MUST reproduce the exact same hash.
+    checks:
+      - id: L3-A
+        description: "all regression tests MUST pass (0 failures)"
+        predicate: "phase_b_result.regression_test_failures == 0"
+        on_fail: "SOFT_REJECT"
+        failure_code: F-003_CONTEXT_REGRESSION
+
+      - id: L3-B
+        description: "replay of this patch on the baseline MUST produce the same benchmark_signature"
+        predicate: "replay_benchmark_signature == original_benchmark_signature"
+        on_fail: "QUARANTINE"
+        failure_code: F-015_NONDETERMINISTIC_PATCH
+
+      - id: L3-C
+        description: "stability_index.score for this candidate MUST be >= stability_index_baseline"
+        predicate: "candidate_stability_index >= system_state.stability_index_baseline"
+        on_fail: "SOFT_REJECT"
+        failure_code: F-004_METRIC_INFLATION
+
+      - id: L3-D
+        description: "a restore-point snapshot MUST exist before PROMOTING is entered"
+        predicate: "restore_point_path != null AND fs.existsSync(restore_point_path)"
+        on_fail: "HARD_REJECT"
+        failure_code: F-013_MISSING_RESTORE_POINT
+
+# ---------------------------------------------------------------------------
+# State definitions
+# ---------------------------------------------------------------------------
+
+states:
+
+  # ──────────────────────────────────────────────────────────────────────────
+  # OBSERVING
+  # ──────────────────────────────────────────────────────────────────────────
+  OBSERVING:
+    description: >
+      Idle.  System reads world state, loads active FailureLedger, and waits
+      for a qualifying trigger to begin the next hypothesis cycle.
+      This is the SAFE state — always valid to return here on failure.
+
+    entry_actions:
+      - "persist TaskStateMachineRecord(status=OBSERVING) to task_state.jsonl"
+      - "load active_failure_ledger from failure_ledger.jsonl"
+      - "prune adaptation_memory entries below HINT_MIN_EFFECTIVE_SCORE"
+      - "compute DriftSummary from drift_state.json (non-blocking)"
+
+    transitions:
+      - to: HYPOTHESIZING
+        trigger: "new_candidate_available OR scheduled_cycle_start"
+        guards:
+          - "active_failure_ledger does NOT contain F-018_CONSTITUTIONAL_BYPASS with occurrence_count > 3"
+          - "system_state.stability_index.score >= 0.0 (always proceed; ledger is advisory at this stage)"
+        note: >
+          Ledger codes do not block entry into HYPOTHESIZING; they are injected
+          as negative_constraints into the Phase A prompt instead (F-019 detection
+          happens upstream via L1-F check).
+
+    restart_recovery:
+      on_load_failure: "emit F-011_STATE_LOSS_ON_RESTART, stay OBSERVING, alert operator"
+      on_missing_record: "initialize fresh TaskStateMachineRecord, stay OBSERVING"
+      note: >
+        The ONLY safe restart landing state.  If a persisted record says
+        HYPOTHESIZING/TESTING/PROMOTING and the process was killed mid-flight,
+        the record is valid and used as-is (resumption).  If the record is
+        unreadable, re-initialize here.
+
+  # ──────────────────────────────────────────────────────────────────────────
+  # HYPOTHESIZING
+  # ──────────────────────────────────────────────────────────────────────────
+  HYPOTHESIZING:
+    description: >
+      Phase A — generate candidate patches via the OpenClaw gateway.
+      All L1 (Invariant) checks are enforced here before a candidate
+      is accepted into the evaluation queue.
+
+    entry_actions:
+      - "persist TaskStateMachineRecord(status=HYPOTHESIZING, active_candidate_id=null)"
+      - "inject active_failure_ledger as negative_constraints into Phase A prompt"
+      - "set active_candidate_id on first qualifying candidate"
+
+    ac_layers_enforced: [L1]
+
+    per_candidate_guards:
+      check_order: [L1-A, L1-B, L1-C, L1-D, L1-E, L1-F]
+      on_any_fail:
+        action: HARD_REJECT
+        emit_to_ledger: true
+        update_gateway_audit: true   # write violated_invariant_ids field
+        return_state: OBSERVING
+
+    transitions:
+      - to: TESTING
+        trigger: "candidate passes all L1 checks"
+        guards:
+          - "candidate.patch_diff is non-empty"
+          - "GatewayDecision record exists with verdict=PASS"
+        actions:
+          - "persist TaskStateMachineRecord(status=HYPOTHESIZING→TESTING, active_candidate_id=<id>)"
+          - "snapshot restore point to restore_point_<cycle_id>.tar.gz"
+
+      - to: OBSERVING
+        trigger: "all candidates hard-rejected OR max_enqueue_per_day exhausted"
+
+  # ──────────────────────────────────────────────────────────────────────────
+  # TESTING
+  # ──────────────────────────────────────────────────────────────────────────
+  TESTING:
+    description: >
+      Phase B — run BenchmarkSandboxRunner + invariant checks + regression tests.
+      L2 (Measurable Outcome) and L3 (No Regression) checks enforced here.
+      Sandbox MUST be network-isolated (deny_external_network=true).
+
+    entry_actions:
+      - "persist TaskStateMachineRecord(status=TESTING)"
+      - "assert sandbox_config.deny_external_network != false, else emit F-014 and abort"
+      - "record pre-patch benchmark_signature for L2-C / L3-B replay check"
+
+    ac_layers_enforced: [L2, L3]
+
+    evaluation_sequence:
+      - step: 0
+        name: "attribution pre-check (Phase B pre-gate)"
+        description: >
+          PatchCandidate.attribution の有無を blast_radius に応じて検証する。
+          判定表:
+            SELF   : attribution の有無に関わらず無条件通過。
+            TENANT : attribution 欠損時 → F-020 発行, disposition=DEFERRED_HUMAN, OBSERVING 遷移。
+                     attribution 存在時 → step 1 へ進む。
+            GLOBAL : L1-D (HARD_REJECT) にて既に梶検済み。ここでのアクションなし。
+        on_TENANT_attribution_missing:
+          - emit_failure_code: F-020_ATTRIBUTION_MISSING
+          - set_disposition: DEFERRED_HUMAN
+          - persist_deferred_to_review_queue  # blast_radius=TENANT, attribution=null
+          - transition_observing
+
+      - step: 1
+        name: "pre-patch baseline measurement"
+        action: "sandbox.measureMetrics() with patched_dir=null"
+        on_error: "emit F-009_MEASUREMENT_ENV_INVALID, transition to OBSERVING"
+
+      - step: 2
+        name: "apply patch"
+        action: "sandbox.applyPatch(candidate.patch_diff)"
+        on_error: "emit F-012_PARTIAL_APPLY_SPLIT if partial, transition to OBSERVING"
+
+      - step: 3
+        name: "post-patch measurement"
+        action: "sandbox.measureMetrics() with patched_dir"
+        on_error: "emit F-009_MEASUREMENT_ENV_INVALID, transition to OBSERVING"
+
+      - step: 4
+        name: "L2 checks"
+        checks: [L2-A, L2-B, L2-C, L2-D, L2-E, L2-F]
+        on_QUARANTINE: "emit code, transition to OBSERVING"
+        on_DEFER: "emit code, transition to OBSERVING (candidate requeued for next cycle)"
+
+      - step: 5
+        name: "regression tests"
+        action: "sandbox.runRegressionTests(invariant_ids)"
+        failure_threshold: 0   # 0 failures allowed
+
+      - step: 6
+        name: "L3 checks"
+        checks: [L3-A, L3-B, L3-C, L3-D]
+        on_SOFT_REJECT: "emit code, transition to OBSERVING"
+        on_HARD_REJECT: "emit code, transition to OBSERVING"
+
+    transitions:
+      - to: PROMOTING
+        trigger: "all L2 + L3 checks pass"
+        guards:
+          - "sandbox.getProvenance().measurement_env_valid == true"
+          - "restore_point exists (L3-D already verified)"
+        actions:
+          - "persist TaskStateMachineRecord(status=PROMOTING)"
+
+      - to: OBSERVING
+        trigger: "any check fails"
+        actions:
+          - "sandbox.close()"
+          - "persist TaskStateMachineRecord(status=OBSERVING)"
+
+  # ──────────────────────────────────────────────────────────────────────────
+  # PROMOTING
+  # ──────────────────────────────────────────────────────────────────────────
+  PROMOTING:
+    description: >
+      Phase C — promotion gate decision + adaptation memory write.
+      If gate passes, skill is written to adaptation_memory.jsonl.
+      Returns to OBSERVING unconditionally after completion or failure.
+
+    entry_actions:
+      - "persist TaskStateMachineRecord(status=PROMOTING)"
+      - "verify restore_point exists (double-check before write)"
+
+    promotion_gate_checks:
+      - "PromotingGateResult.verdict == 'PROMOTE'"
+      - "PromotedSkill.confirmed_improvements.saved_time_minutes >= 0"
+      - "PromotedSkill.blast_radius matches candidate.blast_radius"
+
+    on_promotion_gate_fail:
+      actions:
+        - set_disposition: DEFERRED_HUMAN
+        - persist_deferred_to_review_queue  # blast_radius=GLOBAL
+        - transition_observing
+      emit_to_ledger: false    # gate fail is not a negative constraint; it's normal
+
+    on_promote_success:
+      actions:
+        - persist_attribution_to_memory     # attribution_snapshot ← source_candidate.attribution
+        - "write PromotedSkill to adaptation_memory.jsonl (atomic append)"
+        - "update openclaw_intent_stats sidecar"
+        - "record DriftRunEntry if DriftMonitor is wired"
+        - "persist ProofSummary for this cycle"
+        - "remove restore_point snapshot (cycle complete, rollback no longer needed)"
+      transition: OBSERVING
+
+    transitions:
+      - to: OBSERVING
+        trigger: "always (promotion or rejection, success or failure)"
+        actions:
+          - "persist TaskStateMachineRecord(status=OBSERVING, active_candidate_id=null)"
+          - "sandbox.close()"
+
+# ---------------------------------------------------------------------------
+# Failure code registry  (canonical mapping: raw issue → F-code)
+# ---------------------------------------------------------------------------
+# This section is the Failure Ledger seed.  Each entry becomes a
+# FailureLedgerEntry.negative_constraint that is injected into Phase A on
+# subsequent cycles to prevent repeated violations.
+
+failure_code_registry:
+
+  - code: F-001_SECURITY_DOWNGRADE
+    category: Constitutional
+    raw_issue: "#3"
+    negative_constraint: >
+      Do NOT propose patches that modify any file under gate/, ledger/, constitution/,
+      or any path matching forbidden_target_substrings.
+
+  - code: F-002_DEPENDENCY_IGNORE_DELETE
+    category: Constitutional
+    raw_issue: "#7 (dependency rule bypass)"
+    negative_constraint: >
+      Do NOT delete or ignore declared package dependencies without explicit rationale
+      reviewed by a human operator.
+
+  - code: F-003_CONTEXT_REGRESSION
+    category: Constitutional
+    raw_issue: "#7 (stale snapshot)"
+    negative_constraint: >
+      Do NOT proceed with a candidate if the world_state_snapshot was produced
+      more than 24 hours before cycle start.
+
+  - code: F-004_METRIC_INFLATION
+    category: Evaluation
+    raw_issue: "#2"
+    negative_constraint: >
+      Do NOT populate saved_time_minutes or stability_index from free-text estimates.
+      All metrics MUST be sourced from benchmark subprocess output (measurement_env_valid=true).
+
+  - code: F-005_BENCHMARK_PATH_WRITE
+    category: Evaluation
+    raw_issue: "#9"
+    negative_constraint: >
+      Do NOT include changes to benchmark scripts (phase14/benchmarks/) in any patch_diff.
+      Measurement infrastructure is immutable from the candidate's perspective.
+
+  - code: F-006_SELF_REPORTED_METRIC
+    category: Evaluation
+    raw_issue: "#11"
+    negative_constraint: >
+      Do NOT include self-assessed performance claims in rationale as evidence.
+      All improvement claims must be backed by RawBenchResult from the sandbox runner.
+
+  - code: F-007_SINGLE_SAMPLE_PROMOTION
+    category: Evaluation
+    raw_issue: "#12"
+    negative_constraint: >
+      Do NOT propose candidates whose expected improvement confidence is low.
+      Expect repetitions >= 3 and confidence_weight >= 0.70 to be enforced.
+
+  - code: F-008_HASH_MISMATCH_REPLAY
+    category: Evaluation
+    raw_issue: "#15"
+    negative_constraint: >
+      Any patch whose replay produces a different benchmark_signature than the
+      original run will be quarantined.  Ensure deterministic code paths only.
+
+  - code: F-009_MEASUREMENT_ENV_INVALID
+    category: Evaluation
+    raw_issue: "infrastructure"
+    negative_constraint: >
+      Do NOT rely on a measurement whose measurement_env_valid=false.
+      Such runs are infrastructure failures and must not influence promotion decisions.
+
+  - code: F-010_SILENT_DRIFT
+    category: Evaluation
+    raw_issue: "drift monitoring"
+    negative_constraint: >
+      When DriftMonitor reports any_drift_detected=true, promotion is blocked for
+      this cycle.  Do not re-propose the same candidate until drift is resolved.
+
+  - code: F-011_STATE_LOSS_ON_RESTART
+    category: State
+    raw_issue: "#1"
+    negative_constraint: >
+      All in-progress state MUST be persisted to task_state.jsonl before any
+      non-trivial computation.  If the record is unreadable on restart, emit
+      F-011 and alert the operator before proceeding.
+
+  - code: F-012_PARTIAL_APPLY_SPLIT
+    category: State
+    raw_issue: "#5"
+    negative_constraint: >
+      If git apply (or patch equivalent) fails on any hunk, roll back ALL hunks.
+      Never leave the working directory in a partial-apply state.
+
+  - code: F-013_MISSING_RESTORE_POINT
+    category: State
+    raw_issue: "#14"
+    negative_constraint: >
+      PROMOTING MUST NOT begin without a confirmed restore-point snapshot.
+      If the snapshot is missing, abort TESTING and return to OBSERVING.
+
+  - code: F-014_SANDBOX_EGRESS_VIOLATION
+    category: Constitutional
+    raw_issue: "#10"
+    negative_constraint: >
+      BenchmarkSandboxRunner MUST always run with deny_external_network=true.
+      Any candidate that requires external network access during benchmarking
+      is automatically quarantined as a measurement-integrity violation.
+
+  - code: F-015_NONDETERMINISTIC_PATCH
+    category: Integrity
+    raw_issue: "#6"
+    negative_constraint: >
+      Do NOT propose patches whose outcome depends on wall-clock time, random
+      seeds, external APIs, or any non-deterministic input.  Replay MUST
+      reproduce the same benchmark_signature.
+
+  - code: F-016_AUDIT_LOG_DEGRADATION
+    category: Observability
+    raw_issue: "#4"
+    negative_constraint: >
+      All GatewayAuditEntry records MUST include schema_version, request_id,
+      submitted_at, evaluated_at, and reject_code.  Missing fields are a
+      governance violation, not a minor omission.
+
+  - code: F-017_REJECTION_REASON_INVISIBLE
+    category: Observability
+    raw_issue: "#13"
+    negative_constraint: >
+      When a HARD_REJECT fires with FORBIDDEN_TARGET or INVARIANT_VIOLATION,
+      violated_invariant_ids MUST be populated.  A rejection with no specific
+      IDs is treated as an audit-log failure (F-016).
+
+  - code: F-018_CONSTITUTIONAL_BYPASS
+    category: Constitutional
+    raw_issue: "#7"
+    negative_constraint: >
+      No action may reach Phase A without a matching GatewayDecision(verdict=PASS).
+      Any candidate that cannot be correlated to a gateway audit record is
+      treated as a constitutional bypass and hard-rejected.
+
+  - code: F-019_NEGATIVE_CONSTRAINT_IGNORED
+    category: Boundary
+    raw_issue: "#8"
+    negative_constraint: >
+      Before generating a candidate, review ALL active FailureLedgerEntry records.
+      Do NOT propose any patch that would re-trigger an active negative_constraint —
+      each failure in the ledger is a permanent mine.
+
+  - code: F-020_ATTRIBUTION_MISSING
+    category: Traceability
+    raw_issue: "attribution/pmi-gap"
+    emit_to_ledger: false   # 設計問題。コード欠陥ではないため永続台帳に書かない。
+    negative_constraint: >
+      blast_radius=TENANT の PatchCandidate は attribution.fulfills_invariant_ids
+      および attribution.rationale を必須包含すること。
+      欠損候補は人間レビュー (DEFERRED_HUMAN) に回され、次サイクルの Phase A が
+      attribution 付きの候補を再生成するまで自動プロモーションされない。
+
+# ---------------------------------------------------------------------------
+# Restart recovery protocol
+# ---------------------------------------------------------------------------
+
+restart_recovery:
+  description: >
+    On process restart, the runtime MUST execute this protocol before
+    resuming any Phase work.  This prevents "reset to zero" (Issue #1).
+
+  steps:
+    - step: 1
+      name: "read task_state.jsonl"
+      action: "load last TaskStateMachineRecord (last line of JSONL)"
+      on_failure: "emit F-011_STATE_LOSS_ON_RESTART, initialize OBSERVING"
+
+    - step: 2
+      name: "validate record"
+      checks:
+        - "schema_version == 'task_state/0.1'"
+        - "status in [OBSERVING, HYPOTHESIZING, TESTING, PROMOTING]"
+        - "cycle_id is non-empty"
+      on_invalid: "emit F-011_STATE_LOSS_ON_RESTART, initialize OBSERVING"
+
+    - step: 3
+      name: "load active failure ledger"
+      action: "read failure_ledger.jsonl, filter cleared=false"
+      on_failure: "proceed with empty ledger (non-fatal — observability only)"
+
+    - step: 4
+      name: "resume from saved state"
+      rules:
+        OBSERVING:     "continue normally — safe landing state"
+        HYPOTHESIZING: "resume from L1 checks on active_candidate_id if present"
+        TESTING:       "resume TESTING at the last completed evaluation_sequence step"
+        PROMOTING:     "verify restore_point exists, then re-enter PROMOTING gate"
+
+    - step: 5
+      name: "write resume event to audit log"
+      action: "append GatewayAuditEntry with action='system_restart_resume', target=cycle_id"

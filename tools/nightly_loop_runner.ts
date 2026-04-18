@@ -424,7 +424,8 @@ async function runPhaseAObserving(
   cycle_id: string,
   ledger_snapshot: LedgerStoreSnapshot,
   config: NightlyLoopConfig,
-  max_candidates_override?: number  // Phase E ②: cap from previous cycle's drift adaptation
+  max_candidates_override?: number,  // Phase E ②: cap from previous cycle's drift adaptation
+  blast_radius_ceiling?: 'SELF' | 'TENANT' | 'GLOBAL' | null  // Phase E ②: ceiling from drift adaptation
 ): Promise<{ system_prompt: string; user_prompt: string }> {
   const input_pack = assemblePhaseAInputPack({
     cycle_id,
@@ -436,6 +437,7 @@ async function runPhaseAObserving(
     regression_test_total: ctx.regression_test_total,
     max_seeds: config.max_focus_seeds ?? DEFAULT_MAX_FOCUS_SEEDS,
     max_candidates: max_candidates_override ?? config.max_candidates ?? DEFAULT_MAX_CANDIDATES,
+    blast_radius_ceiling: blast_radius_ceiling ?? null,
   });
 
   const audit_dir = path.join(config.run_dir, 'audit');
@@ -611,7 +613,8 @@ export async function runNightlyLoop(
 
       // Render Phase A prompts
       const { system_prompt, user_prompt } = await runPhaseAObserving(
-        ctx, cycle_id, ledger_snapshot, config, effective_max_candidates
+        ctx, cycle_id, ledger_snapshot, config, effective_max_candidates,
+        prev_adaptation?.blast_radius_ceiling ?? null
       );
 
       // Call LLM dispatcher

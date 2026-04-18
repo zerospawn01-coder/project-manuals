@@ -1,0 +1,74 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://project-manuals/schemas/execution-trace.schema.json",
+  "title": "ExecutionTrace",
+  "description": "An immutable record of one phase14 pipeline run, written to the ledger.",
+  "type": "object",
+  "required": ["trace_id", "run_id", "phase", "started_at", "ended_at", "outcome", "invariants_evaluated"],
+  "additionalProperties": false,
+  "properties": {
+    "trace_id": {
+      "type": "string",
+      "pattern": "^TRACE-[0-9]{4}[0-9]{2}[0-9]{2}T[0-9]{6}Z-[A-Z0-9]{6}$",
+      "description": "Unique trace ID. Format: TRACE-YYYYMMDDTHHmmSSZ-XXXXXX"
+    },
+    "run_id": {
+      "type": "string",
+      "description": "ID of the nightly loop run that spawned this trace."
+    },
+    "phase": {
+      "type": "string",
+      "enum": ["A", "B", "C", "D"],
+      "description": "Phase14 pipeline phase."
+    },
+    "started_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "ended_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "duration_ms": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "outcome": {
+      "type": "string",
+      "enum": ["PASS", "FAIL", "PARTIAL", "SKIPPED"]
+    },
+    "failure_codes": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "pattern": "^F-[0-9]{3}(_[A-Z_]+)?$"
+      },
+      "description": "Failure codes observed during this phase (empty if PASS)."
+    },
+    "invariants_evaluated": {
+      "type": "array",
+      "items": {"type": "string"},
+      "minItems": 0,
+      "description": "Invariant IDs evaluated during this phase."
+    },
+    "invariants_violated": {
+      "type": "array",
+      "items": {"type": "string"},
+      "description": "Invariant IDs that were violated."
+    },
+    "candidates_in": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Number of candidates entering this phase."
+    },
+    "candidates_out": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Number of candidates passing this phase."
+    },
+    "operator_notes": {
+      "type": "string",
+      "description": "Optional human-written notes attached to this trace."
+    }
+  }
+}

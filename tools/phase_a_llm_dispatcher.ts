@@ -78,8 +78,7 @@ export const PHASE14_SYSTEM_TEMPLATE = `\
      　変更が必要な場合は affected_targets に含めず、
        title に "(config change required)" を付記して discarded_candidates に分類せよ。
 
-  2. estimated_blast_radius を 'GLOBAL' に設定してはならない（TENANT以下のみ許可）。
-     cross-module 変更が必要な場合は当該候補を discarded_candidates に移動せよ。
+  2. estimated_blast_radius の上限: {{BLAST_RADIUS_CEILING_LINE}}
 
   3. negative_constraint_violations が空でない候補を candidates に含めてはならない。
 

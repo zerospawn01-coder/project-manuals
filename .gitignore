@@ -2,8 +2,36 @@ dist/
 node_modules/
 *.js.map
 
+# Python bytecode caches
+**/__pycache__/
+**/*.pyc
+**/*.pyo
+
 # Live Fire 実行結果 — 大量の JSON を含むためコミット対象外
 phase14/data/live_fire_runs/
+
+# Runtime state files (regenerated each cycle — not source)
+phase14/data/adaptation_memory.jsonl
+phase14/data/adaptation_memory_env_scores.json
+phase14/data/adaptation_memory_reuse_stats.json
+phase14/data/comparison_gate_result.*.json
+phase14/data/environment_profile.json
+phase14/data/openclaw_enqueue_queue.*.jsonl
+phase14/data/openclaw_gateway_audit.jsonl
+phase14/data/repo_health_snapshot.json
+phase14/data/sbm_ledger.jsonl
+phase14/data/sbm_logs/
+phase14/data/ledger/
+phase14/ledger/
+
+# Renderer runtime snapshots
+renderer-react/src/app/comparison_data.json
+renderer-react/src/app/policy.json
+renderer-react/src/app/policy_set.json
+
+# One-off scripts that should not be part of the public surface
+check_oc.js
+observe20.ps1
 
 # 環境変数（APIキー等） — 絶対にコミットしない
 .env

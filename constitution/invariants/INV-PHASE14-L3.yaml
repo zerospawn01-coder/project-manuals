@@ -1,0 +1,23 @@
+id: "INV-PHASE14-L3"
+slug: "l3_readiness_gate"
+failure_code: null   # does not map to a FailureLedgerCode directly
+severity: HIGH
+non_waivable: false
+
+statement: >
+  Phase 14 modules may not advance to L3 (production) readiness without
+  passing the healthy-streak judge (week2_streak_result.json:
+  l3_readiness = ELIGIBLE).  Any attempt to skip or forge the streak
+  result constitutes a governance violation.
+
+detection:
+  method: file_check
+  file: "phase14/data/week2_streak_result.json"
+  field: "l3_readiness"
+  required_value: "ELIGIBLE"
+
+enforcement:
+  phase: "A"
+  gate: "focus_seed_filter"
+  action: "add_invariant_stress_seed"
+  related_script: "phase14/scripts/judge_healthy_streak.py"

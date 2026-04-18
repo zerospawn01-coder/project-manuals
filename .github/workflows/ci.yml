@@ -1,0 +1,224 @@
+name: CI Gate
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+    branches: ["**"]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    working-directory: .
+
+# ── Shared setup step (reused via composite-action idiom) ─────────────────
+# Each job runs `npm ci && npm run build` so dist/ is available.
+
+jobs:
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # Job 1: lint-typecheck
+  # ─────────────────────────────────────────────────────────────────────────
+  lint-typecheck:
+    name: "lint / typecheck"
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: TypeScript typecheck (no emit)
+        run: ./node_modules/.bin/tsc --noEmit
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # Job 2: validate-schema
+  # ─────────────────────────────────────────────────────────────────────────
+  validate-schema:
+    name: "validate / schema"
+    needs: lint-typecheck
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build
+        run: ./node_modules/.bin/tsc
+
+      - name: Schema rejection tests
+        run: node dist/tests/schema/schema_rejection.test.js
+
+      - name: Workflow contract validation
+        run: npm run workflow:validate
+
+      - name: Assert invalid orchestrator event is rejected
+        run: |
+          if npm run workflow:event:validate:orchestrator:invalid 2>/dev/null; then
+            echo "::error::Invalid orchestrator event passed validation — expected FAIL"
+            exit 1
+          fi
+          echo "Invalid sample correctly rejected."
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # Job 3: validate-invariants  (includes trust-boundary check)
+  # ─────────────────────────────────────────────────────────────────────────
+  validate-invariants:
+    name: "validate / invariants + trust-boundary"
+    needs: lint-typecheck
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build
+        run: ./node_modules/.bin/tsc
+
+      - name: Run verify_constitution (human-readable)
+        id: verify
+        run: node dist/tools/verify_constitution.js --verbose
+
+      - name: Run verify_constitution (machine-readable annotation)
+        if: failure()
+        run: |
+          node dist/tools/verify_constitution.js --json | tee /tmp/verify_output.json || true
+          echo "::error::Governance verification failed. See structured output below."
+          cat /tmp/verify_output.json
+
+      - name: Save governance JSON for gate aggregation
+        if: always()
+        run: |
+          mkdir -p /tmp/gate-artifacts
+          node dist/tools/verify_constitution.js --json > /tmp/gate-artifacts/verify_result.json || true
+
+      - name: Upload governance artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: verify-constitution-result
+          path: /tmp/gate-artifacts/verify_result.json
+          retention-days: 1
+          overwrite: true
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # Job 4: test-governance
+  # ─────────────────────────────────────────────────────────────────────────
+  test-governance:
+    name: "test / governance"
+    needs: [validate-schema, validate-invariants]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build
+        run: ./node_modules/.bin/tsc
+
+      - name: fail_closed governance test
+        run: node dist/tests/governance/fail_closed.test.js
+
+      - name: invariant_registry governance test
+        run: node dist/tests/invariant/invariant_registry.test.js
+
+      - name: schema_rejection governance test
+        run: node dist/tests/schema/schema_rejection.test.js
+
+      - name: Existing tests (tamper + gate + e2e)
+        run: |
+          node dist/tests/tamper_test.js
+          node dist/tests/transaction_gate.test.js
+          node dist/tests/nightly_loop_e2e.test.js
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # ─────────────────────────────────────────────────────────────────────────
+  # ─────────────────────────────────────────────────────────────────────────
+  # Job 5: gate  (aggregates — this is the required status check)
+  # Single authoritative decision point: PASS | FAIL. No jq dependency.
+  # Artifact absent when invariants failed = FAIL (fail-closed).
+  # ─────────────────────────────────────────────────────────────────────────
+  gate:
+    name: "gate — PASS / FAIL"
+    needs: [lint-typecheck, validate-schema, validate-invariants, test-governance]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # Run even if a dependency failed so we can emit a structured summary
+    if: always()
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build
+        run: ./node_modules/.bin/tsc
+
+      - name: Download governance violations artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: verify-constitution-result
+          path: /tmp/gate-artifacts/
+        # Absence handled by merge_gate.ts (fail-closed) — do not hard-fail here
+        continue-on-error: true
+
+      - name: Evaluate gate result
+        env:
+          LINT: ${{ needs.lint-typecheck.result }}
+          SCHEMA: ${{ needs.validate-schema.result }}
+          INVARIANTS: ${{ needs.validate-invariants.result }}
+          GOVERNANCE: ${{ needs.test-governance.result }}
+          VERIFY_JSON_PATH: /tmp/gate-artifacts/verify_result.json
+        run: |
+          # --- Run Node gate aggregator (no jq) ---
+          node dist/tools/merge_gate.js > gate_result.json || true
+
+          # Guard: if output is not valid JSON, hard-fail with diagnostic
+          if ! node -e "JSON.parse(require('fs').readFileSync('gate_result.json','utf8'))" 2>/dev/null; then
+            echo '{"status":"FAIL","violations":[{"type":"GATE_INTERNAL_ERROR","layer":"GOVERNANCE","reason":"merge_gate.js produced invalid JSON output"}]}' > gate_result.json
+          fi
+
+          cat gate_result.json
+
+          STATUS=$(node -e "console.log(JSON.parse(require('fs').readFileSync('gate_result.json','utf8')).status)")
+          if [ "$STATUS" = "FAIL" ]; then
+            echo "::error::CI gate FAIL — ${{ github.sha }}"
+            exit 1
+          fi
+
+          echo "CI gate PASS — all checks green."

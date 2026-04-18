@@ -1,0 +1,22 @@
+id: "INV-004"
+slug: "no_metric_inflation"
+failure_code: "F-004_METRIC_INFLATION"
+severity: CRITICAL
+non_waivable: false
+
+statement: >
+  A patch candidate's declared improvement predictions must not exceed what
+  the sandbox actually measures.  If the candidate over-claimed its benefit,
+  a negative constraint is injected so the OS cannot propose the same
+  inflation pattern again.
+
+detection:
+  method: sandbox_measurement
+  reject_on: "any_actual_metric < predicted_metric"
+  negative_constraint_injected: true
+
+enforcement:
+  phase: "B"
+  gate: "measurable_outcome"
+  action: "reject_and_ledger_write"
+  block_code: "PROMOTION_GATE_FAIL"

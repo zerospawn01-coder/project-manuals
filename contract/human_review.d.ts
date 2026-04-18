@@ -83,10 +83,12 @@ export interface PendingHumanReviewEntry {
   affected_targets: string[];
 
   /**
-   * Always 'GLOBAL' — that is the only blast_radius that triggers DEFERRED_HUMAN.
-   * Stored explicitly so the UI can render it without re-deriving.
+   * Always 'GLOBAL' — that is the only blast_radius that triggers DEFERRED_HUMAN
+   * via the Phase C blast-radius gate.
+   * v0.1 拡張: attribution 欠損 + blast_radius='TENANT' の場合も 'TENANT' として入る
+   * (F-020_ATTRIBUTION_MISSING 由来)。UI 側でデフォルト色分けを変えること。
    */
-  blast_radius: 'GLOBAL';
+  blast_radius: 'GLOBAL' | 'TENANT';
 
   /**
    * Phase B sandbox confidence score for this patch.
@@ -106,6 +108,26 @@ export interface PendingHumanReviewEntry {
    * e.g. "blast_radius='GLOBAL' exceeds max_allowed_blast_radius='TENANT'"
    */
   deferral_reason: string;
+
+  /**
+   * Attribution summary — レビュアーが「なぜこのパッチか」を判断するために必要。
+   *
+   * null = attribution なし (F-020_ATTRIBUTION_MISSING 由来か旧フォーマット)。
+   * null の場合、UI は "根拠なし" ラベルを表示し、APPROVE を黄色警告にすること。
+   *
+   * 非 null の場合は最低限の根拠が埋め込まれており、レビュアーが
+   * expected_effect・fallback_if_rejected を確認して承認判断できる。
+   */
+  attribution_summary: {
+    /** 満たすべき不変条件 ID 一覧 (non-empty) */
+    fulfills_invariant_ids: [string, ...string[]];
+    /** 1文の期待効果 ("Reduces X by Y" 形式) */
+    expected_effect: string;
+    /** 不採用時のフォールバック挙動 */
+    fallback_if_rejected: 'skip' | 'escalate' | 'rollback';
+    /** 観測起点の識別子 */
+    observation_ref: string;
+  } | null;
 }
 
 // ---------------------------------------------------------------------------

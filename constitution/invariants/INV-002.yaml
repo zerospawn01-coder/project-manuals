@@ -1,0 +1,24 @@
+id: "INV-002"
+slug: "no_dependency_ignore_delete"
+failure_code: "F-002_DEPENDENCY_IGNORE_DELETE"
+severity: CRITICAL
+non_waivable: true
+
+statement: >
+  No AI-generated patch may delete, downgrade, or silence a declared
+  dependency without a corresponding explicit human-approved justification
+  present in the commit or PR description.
+
+detection:
+  method: diff_analysis
+  patterns:
+    - "removes from package.json dependencies"
+    - "downgrades version without justification"
+    - "adds to .npmignore or .gitignore without comment"
+  reject_on_match: true
+
+enforcement:
+  phase: "B"
+  gate: "invariant_check"
+  action: "reject_and_ledger_write"
+  block_code: "INV_VIOLATION_REJECT"
