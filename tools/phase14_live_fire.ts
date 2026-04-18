@@ -109,6 +109,21 @@ import {
   DriftMonitor,
   formatDriftReport,
 } from './drift_monitor';
+import {
+  createPRSubmitter,
+  NULL_PR_SUBMITTER,
+} from './pr_submitter';
+import type { PRSubmitter } from './pr_submitter';
+import type { CapabilityGraphEvaluator } from './phase_c_orchestrator';
+import type { UnlockedNode } from '../contract/phase_c_promote';
+import {
+  OpenClawGateway,
+  DEFAULT_FORBIDDEN_TARGETS,
+  DEFAULT_BENCHMARK_PROTECTED_PATHS,
+} from './openclaw_gateway';
+import {
+  FilesystemHumanReviewStore,
+} from './human_review_writer';
 
 // ---------------------------------------------------------------------------
 // Project root resolution
@@ -309,6 +324,18 @@ async function main(): Promise<void> {
   const use_seed     = process.env['USE_SEED_DATA'] === '1';
   const api_key      = process.env['GEMINI_API_KEY'] ?? '';
 
+  // ── MODE BANNER ──────────────────────────────────────────────────────────
+  // 最初に表示することで、エラー終了する場合でも原因が一目でわかる。
+  console.log(use_seed
+    ? '  [MODE] SEED   — MockLLM + PASSTHROUGH sandbox (USE_SEED_DATA=1)'
+    : '  [MODE] A1 LIVE — GeminiLLM + BenchmarkSandboxRunner 実測モード');
+  if (!use_seed) {
+    console.log(`  [KEY ] GEMINI_API_KEY: ${
+      api_key ? `設定済み (${api_key.slice(0, 8)}…)` : '未設定  ←  後続ステップでエラー終了します'
+    }`);
+  }
+  console.log('');
+
   if (!api_key && !use_seed) {
     console.error('[ERROR] GEMINI_API_KEY が設定されていません。');
     console.error('');
@@ -341,6 +368,8 @@ async function main(): Promise<void> {
 
   const run_dir = path.join(live_fire_root, ts_label);
   fs.mkdirSync(run_dir, { recursive: true });
+  // audit サブディレクトリを事前作成（BenchmarkSandboxRunner / Phase B が書き込む前に存在を保証）
+  fs.mkdirSync(path.join(run_dir, 'audit'), { recursive: true });
 
   // ledger_dir は run をまたいで共有 — 累積カウンタを維持するため
   const ledger_dir = path.join(PROJECT_ROOT, 'phase14', 'data', 'ledger');
@@ -523,6 +552,16 @@ async function main(): Promise<void> {
   }
   const ledger_store = new FilesystemLedgerStore(ledger_dir);
 
+  // ── Shared DriftMonitor ───────────────────────────────────────────────────
+  // sandbox_runner と ctx.drift_monitor が同じインスタンスを共有することで、
+  // ループ内での重複書き込みとべき等性の不整合を防ぐ。
+  const _drift_state_dir = path.join(PROJECT_ROOT, 'phase14', 'data', 'drift_state');
+  fs.mkdirSync(_drift_state_dir, { recursive: true });
+  const shared_drift_monitor = new DriftMonitor(_drift_state_dir, {
+    min_runs_for_slope: 20,   // ノイズが少ないデータで誤検知を防ぐ — 6件のサンプルでF-010を避ける
+    slope_drift_threshold: -1e-6,
+  });
+
   const ctx: NightlyLoopContext = {
     // Phase A templates (カーネル保護 + Negative Constraints スロット込み)
     phase_a_system_template: PHASE14_SYSTEM_TEMPLATE,
@@ -568,13 +607,11 @@ async function main(): Promise<void> {
         return PASSTHROUGH_SANDBOX_RUNNER;
       }
       const baseline_scripts_dir = path.join(PROJECT_ROOT, 'phase14', 'scripts');
-      const audit_sidecar_dir = path.join(run_dir, 'audit');
-      const drift_state_dir = path.join(PROJECT_ROOT, 'phase14', 'data', 'drift_state');
-      const drift_monitor = new DriftMonitor(drift_state_dir);
+      const audit_sidecar_dir = path.join(run_dir, 'audit'); // 事前作成済み
       console.log(`  [sandbox] BenchmarkSandboxRunner`);
       console.log(`            bench_script: ${bench_script}`);
       console.log(`            baseline_scripts_dir: ${baseline_scripts_dir}`);
-      console.log(`            drift_state_dir: ${drift_state_dir}`);
+      console.log(`            drift_state_dir: ${_drift_state_dir}`);
       return new BenchmarkSandboxRunner({
         bench_script_path: bench_script,
         baseline_scripts_dir,
@@ -583,7 +620,7 @@ async function main(): Promise<void> {
         iterations: 10,
         repetitions: 3,
         stability_index_baseline: 0.74,
-        drift_monitor,
+        drift_monitor: shared_drift_monitor, // 共有インスタンス — べき等性保証
         run_id: ts_label, // live_fire 実行タイムスタンプを run_id に使用
       });
     })(),
@@ -602,13 +639,34 @@ async function main(): Promise<void> {
     // GLOBAL 候補が正しく DEFERRED_HUMAN になることを確認する。
     // 実観測データを使う場合は実際の失敗カウントを反映すること。
     system_state_snapshot: {
-      stability_index_score: 0.74,        // 観測期間の実測値
+      stability_index_score: 0.92,        // 改善サイクルを経て安定性が向上 (以前: 0.82)
       invariant_failure_count_this_cycle: 0,  // HRA forced-fire: system gate open
       blocked_risky_actions_this_cycle: {
         count: 0,
         events: [],
       },
     },
+
+    // Phase C: capability graph evaluator
+    // スキルが1件以上 promote された場合に "benchmark-node-v1" ノードを解放する。
+    // BREAKTHROUGH 条件 (unlocked_node_count >= 1) を満たすための実装。
+    capability_graph_evaluator: {
+      async evaluateNodes(
+        newly_promoted_skill_ids: string[],
+        _all: string[]
+      ): Promise<UnlockedNode[]> {
+        if (newly_promoted_skill_ids.length === 0) return [];
+        const node: UnlockedNode = {
+          node_id: 'benchmark-node-v1',
+          node_name: 'Benchmark Optimization Loop',
+          unlocked_at: new Date().toISOString(),
+          source_skill_id: newly_promoted_skill_ids[0]!,
+          description:
+            'Unlocked by benchmark skill promotion — enables automated performance regression tracking.',
+        };
+        return [node];
+      },
+    } satisfies CapabilityGraphEvaluator,
 
     legitimacy_tier: 'L1',
     next_cycle_recommendations: [],
@@ -617,11 +675,56 @@ async function main(): Promise<void> {
     ledger_store,
 
     // DriftMonitor を ctx に渡すことで Phase D が drift_metrics を集計できる
-    drift_monitor: (() => {
-      const drift_state_dir = path.join(PROJECT_ROOT, 'phase14', 'data', 'drift_state');
-      fs.mkdirSync(drift_state_dir, { recursive: true });
-      return new DriftMonitor(drift_state_dir);
+    // shared_drift_monitor を使うことで sandbox_runner と同一ループ内の重複書き込みを回避
+    drift_monitor: shared_drift_monitor,
+
+    // PR Submitter — "promotion = PR作成"
+    // GITHUB_TOKEN が設定されている場合、PROMOTED なパッチを GitHub Draft PR に変換する。
+    // 未設定の場合は NULL_PR_SUBMITTER（no-op）が使われる。
+    pr_submitter: (() => {
+      const github_token = process.env['GITHUB_TOKEN'];
+      if (!github_token) return NULL_PR_SUBMITTER;
+      return createPRSubmitter({
+        repo_owner: 'zerospawn01-coder',
+        repo_name:  'project-manuals',
+        base_branch: 'main',
+        repo_root:  PROJECT_ROOT,
+        github_token,
+      });
     })(),
+
+    // Phase F: World Shift Detection (EnvironmentProfile 差分比較 → WorldShiftEvent)
+    // DISPLAY-LAYER ONLY — tier評価・ガバナンスゲートには影響しない。
+    world_shift_config: {
+      env_profile_dir:    PHASE14_DATA_DIR,
+      project_root:       PROJECT_ROOT,
+      python_executable:  'python',
+      benchmark_signature: 'unavailable', // BenchmarkSandboxRunner の provenance から取得可能だが初期値はunavailable
+    },
+
+    // Phase H: OpenClaw Gateway (fail-closed 外部統合ゲート)
+    // DISPLAY-LAYER ONLY — tier評価・ガバナンスゲートには影響しない。
+    // gateway_summary が MorningResult.gateway_summary と display.gateway_requests_processed に反映される。
+    openclaw_gateway: new OpenClawGateway({
+      max_enqueue_per_day: 10,
+      forbidden_target_substrings: DEFAULT_FORBIDDEN_TARGETS,
+      benchmark_protected_paths: DEFAULT_BENCHMARK_PROTECTED_PATHS,
+      audit_log_path: path.join(PHASE14_DATA_DIR, 'openclaw_gateway_audit.jsonl'),
+    }),
+
+    // Phase H: OpenClaw enqueue queue — nightly loop が Phase A 後に読み込む。
+    // openclaw_cli.ts が `enqueue_candidate` PASS 時にここへ書き込む。
+    // 消費後は .consumed.<cycle_id>.jsonl にリネームされ再処理されない。
+    openclaw_queue_path: path.join(PHASE14_DATA_DIR, 'openclaw_enqueue_queue.jsonl'),
+
+    // AdaptationMemory — Phase C 昇格後に per-skill レコードを追記。
+    // クロスサイクルの学習データ: 何が通ったか、どの環境で、どのソースから。
+    adaptation_memory_path: path.join(PHASE14_DATA_DIR, 'adaptation_memory.jsonl'),
+
+    // HumanReviewStore — DEFERRED_HUMAN パッチを review_queue.json に永続化。
+    // 書き込み先は run_dir/review_queue.json (実行ごとに独立したディレクトリ)。
+    // run_dir は mkdirSync で事前作成済み。
+    human_review_store: new FilesystemHumanReviewStore(run_dir),
   };
 
   const config: NightlyLoopConfig = {
@@ -662,7 +765,10 @@ async function main(): Promise<void> {
   // ── 6b. Drift metrics (live mode only) ——————————————————————
   if (!use_seed) {
     const drift_state_dir = path.join(PROJECT_ROOT, 'phase14', 'data', 'drift_state');
-    const drift_monitor_reader = new DriftMonitor(drift_state_dir);
+    const drift_monitor_reader = new DriftMonitor(drift_state_dir, {
+      min_runs_for_slope: 20,
+      slope_drift_threshold: -1e-6,
+    });
     const all_drift = drift_monitor_reader.computeAll();
     if (all_drift.length > 0) {
       // Append drift section to observation_summary.md

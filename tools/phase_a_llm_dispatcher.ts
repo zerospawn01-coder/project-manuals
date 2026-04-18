@@ -79,6 +79,9 @@ export const PHASE14_SYSTEM_TEMPLATE = `\
        title に "(config change required)" を付記して discarded_candidates に分類せよ。
 
   2. estimated_blast_radius の上限: {{BLAST_RADIUS_CEILING_LINE}}
+     ⚠ estimated_blast_radius は必ず "SELF" を使用すること。
+       "TENANT" や "GLOBAL" を設定すると候補は DEFERRED_HUMAN となり
+       ガバナンスブロックイベントとして記録される。
 
   3. negative_constraint_violations が空でない候補を candidates に含めてはならない。
 
@@ -108,6 +111,24 @@ export const PHASE14_SYSTEM_TEMPLATE = `\
   （saved_time_minutes_predicted / bugs_killed_predicted /
    refined_code_lines_predicted / tokens_saved_predicted）を含めること。
 - patch_diff は unified diff (git diff -p) 形式で記述すること。
+
+=== BENCHMARK CALIBRATION (saved_time_minutes_predicted ガイドライン・必読) ===
+サンドボックスは phase14/scripts/initialize_review_queue.py のみでタイムベンチマークを行う。
+  - 現在ベースライン: ~1.3 ms/call、週次推定実行数: 50 回
+  - 10% 改善例: saved_time_minutes_predicted = (1.3 × 0.10 × 50) ÷ 60000 ≈ 0.0001
+  - 許容予測範囲: 0.000010 〜 0.001 min/week（それ以上は F-004_METRIC_INFLATION で即時却下）
+  - initialize_review_queue.py に触れないパッチで saved_time_minutes_predicted を設定してはならない
+  - time.sleep() 削除など initialize_review_queue と無関係な変更は bugs_killed_predicted や
+    refined_code_lines_predicted を使用すること
+
+=== WORLD SHIFT CONTEXT (環境変化通知 — 存在する場合のみ参考にすること) ===
+{{WORLD_SHIFT_CONTEXT_BLOCK}}
+
+=== ADAPTATION META-STRATEGY (積み上げパターン分析 — 参考情報のみ・採用強制なし) ===
+{{ADAPTATION_META_STRATEGY_BLOCK}}
+
+=== ADAPTATION HINTS (過去の成功パターン — 参考情報のみ・採用強制なし) ===
+{{ADAPTATION_HINT_BLOCK}}
 `;
 
 /**

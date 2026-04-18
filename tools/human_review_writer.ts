@@ -288,6 +288,8 @@ export function buildReviewQueueEntries(
       reason: string;
       ts: string;
     } | null;
+    /** blast_radius の実際の値。省略時は 'GLOBAL' にフォールバック。 */
+    blast_radius?: 'GLOBAL' | 'TENANT';
   }>,
   patch_metadata: ReadonlyArray<{
     candidate_id: string;
@@ -296,6 +298,8 @@ export function buildReviewQueueEntries(
     affected_targets: string[];
     confidence_score: number;
     source_cycle_id: string;
+    /** attribution_summary 用: PatchCandidate.attribution から転写 (任意)。 */
+    attribution?: import('../contract/phase_a_prompt').PatchAttribution | null;
   }>
 ): PendingHumanReviewEntry[] {
   const meta_map = new Map(patch_metadata.map((m) => [m.candidate_id, m]));
@@ -307,16 +311,28 @@ export function buildReviewQueueEntries(
     const meta = meta_map.get(result.candidate_id);
     if (!meta) continue;
 
+    const attr = meta.attribution ?? null;
+    const attribution_summary: PendingHumanReviewEntry['attribution_summary'] =
+      attr !== null
+        ? {
+            fulfills_invariant_ids: attr.fulfills_invariant_ids,
+            expected_effect: attr.rationale.expected_effect,
+            fallback_if_rejected: attr.rationale.fallback_if_rejected,
+            observation_ref: attr.rationale.observation_ref,
+          }
+        : null;
+
     entries.push({
       patch_id: result.candidate_id,
       source_cycle_id: meta.source_cycle_id,
       title: meta.title,
       description: meta.description,
       affected_targets: meta.affected_targets,
-      blast_radius: 'GLOBAL',
+      blast_radius: result.blast_radius ?? 'GLOBAL',
       confidence_score: meta.confidence_score,
       deferred_at: result.human_review_event.ts,
       deferral_reason: result.human_review_event.reason,
+      attribution_summary,
     });
   }
 

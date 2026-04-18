@@ -77,6 +77,9 @@ import {
   PHASE14_FOCUS_SEED_SET,
   PHASE14_PROTECTED_INVARIANT_IDS,
 } from '../fixtures/phase14_observation_seed';
+import {
+  FilesystemHumanReviewStore,
+} from '../tools/human_review_writer';
 
 // ============================================================================
 // SHARED FIXTURES
@@ -612,8 +615,9 @@ async function test2_phase14TargetsPromoted(): Promise<void> {
 // ============================================================================
 
 async function test3_globalBlastDeferredToHuman(): Promise<void> {
-  const run_dir = makeTmpDir('t3');
+  const run_dir    = makeTmpDir('t3');
   const ledger_dir = makeTmpDir('t3_ledger');
+  const review_dir = makeTmpDir('t3_review');
 
   const cycle_id = `cycle-ph14-t3-${randomUUID()}`;
   // GLOBAL blast_radius → Phase Bの max_allowed_blast_radius を GLOBAL に上げる
@@ -623,6 +627,7 @@ async function test3_globalBlastDeferredToHuman(): Promise<void> {
   const { ctx, config } = makeContext([t2_global], {
     run_dir,
     ledger_dir,
+    human_review_store: new FilesystemHumanReviewStore(review_dir),
     phase_b_config: { max_allowed_blast_radius: 'GLOBAL' } as Partial<PhaseBConfig>,
   });
 
@@ -645,6 +650,28 @@ async function test3_globalBlastDeferredToHuman(): Promise<void> {
   // ── 3b. promoted_skill_count == 0 ────────────────────────────────────
   assert.equal(raw.evolution.promoted_skill_count, 0,
     `GLOBAL blast_radius candidate must NOT be promoted; got promoted_skill_count=${raw.evolution.promoted_skill_count}`);
+
+  // ── 3c. review_queue.json に DEFERRED_HUMAN エントリが書き込まれる ────
+  const queue_path = path.join(review_dir, 'review_queue.json');
+  assert.ok(
+    fs.existsSync(queue_path),
+    'FilesystemHumanReviewStore must create review_queue.json for DEFERRED_HUMAN candidates'
+  );
+  const queue = JSON.parse(fs.readFileSync(queue_path, 'utf8'));
+  assert.ok(
+    Array.isArray(queue.pending) && queue.pending.length >= 1,
+    `review_queue must contain at least 1 pending entry; got ${queue.pending?.length ?? 0}`
+  );
+  assert.equal(
+    queue.pending[0].patch_id,
+    t2_global.candidate_id,
+    `review_queue pending[0].patch_id must match the DEFERRED_HUMAN candidate`
+  );
+  assert.equal(
+    queue.pending[0].blast_radius,
+    'GLOBAL',
+    `review_queue pending[0].blast_radius must be GLOBAL`
+  );
 }
 
 // ============================================================================

@@ -104,6 +104,10 @@ import type {
 
 // Human Review Authority
 import type { HumanReviewStore } from './human_review_writer';
+import {
+  buildReviewQueueEntries,
+  mergeIntoReviewQueue,
+} from './human_review_writer';
 
 // Phase D
 import {
@@ -114,6 +118,9 @@ import type { PhaseDInputPack } from './phase_d_aggregator';
 
 // Drift monitoring
 import type { DriftMonitor, DriftMetrics } from './drift_monitor';
+
+// PR Submitter — PROMOTED → GitHub Draft PR
+import type { PRSubmitter } from './pr_submitter';
 import { computeDriftAdaptation } from './drift_adaptation';
 import type { DriftAdaptationDecision } from './drift_adaptation';
 
@@ -124,15 +131,45 @@ import {
 } from './rollback_executor';
 import type { RollbackExecutionRecord } from './rollback_executor';
 
+// Phase F: Environment profiling + World Shift detection
+import {
+  captureEnvironmentProfile,
+  readEnvironmentProfile,
+  writeEnvironmentProfile,
+} from './environment_profiler';
+import {
+  detectWorldShift,
+  buildWorldShiftReport,
+} from './world_shift_detector';
+import type { WorldShiftReport } from '../contract/world_shift';
+
+// Phase H: OpenClaw Gateway (fail-closed external integration gate)
+import { OpenClawGateway } from './openclaw_gateway';
+
+// AdaptationMemory — per-promoted-skill knowledge persistence
+import {
+  appendAdaptationMemoryEntries,
+  buildAdaptationMemoryEntry,
+  loadRecentAdaptationMemory,
+  computeDedupKey,
+  buildAdaptationHintBlock,
+  buildMetaStrategyBlock,
+  updateReuseStats,
+  loadReuseStats,
+  updateEnvScores,
+} from './adaptation_memory_writer';
+import type { AdaptationMemoryEntry } from '../contract/adaptation_memory';
+
 // Contracts
-import type { PhaseACandidateList, WorldStateSnapshot } from '../contract/phase_a_prompt';
+import type { PhaseACandidateList, PatchCandidate, WorldStateSnapshot } from '../contract/phase_a_prompt';
 import type { PhaseBBatchResult } from '../contract/phase_b_verify';
 import type { PromotingGateResult } from '../contract/phase_c_promote';
-import type { MorningResult } from '../contract/morning_result';
+import type { MorningResult, NightlyCycleAudit } from '../contract/morning_result';
 import type {
   TaskStateMachineRecord,
   TaskStateMachineStatus,
   FailureLedgerEntry,
+  FailureLedgerCode,
   StabilityIndex,
   SavedTimeMinutes,
   EvolutionTier,
@@ -185,6 +222,19 @@ export interface LedgerStore {
 
   /** Read all active failure ledger entries. */
   readFailureLedger(): Promise<FailureLedgerEntry[]>;
+
+  /**
+   * Increment (or create) a single FailureLedgerEntry by code.
+   * Used for direct F-code emission outside of Phase B (e.g., F-011 on restart,
+   * sandbox assertion failure).  If the entry already exists, occurrence_count
+   * is incremented and last_observed_cycle_id updated.  If not, a new entry is
+   * created with occurrence_count = 1.
+   */
+  incrementFailureLedgerCode(
+    code: FailureLedgerCode,
+    negative_constraint: string,
+    cycle_id: string
+  ): Promise<void>;
 
   /**
    * Apply failure ledger writes from a PhaseBBatchResult.
@@ -334,6 +384,92 @@ export interface NightlyLoopContext {
    * included in PhaseDInputPack.drift_metrics → MorningResult.drift.
    */
   drift_monitor?: DriftMonitor;
+
+  /**
+   * Optional PR Submitter — "promotion = PR作成".
+   * When present, each PROMOTED patch is submitted as a GitHub Draft PR
+   * immediately after Phase C completes (before Phase D aggregation).
+   * Requires GITHUB_TOKEN in the environment or PRSubmitterConfig.github_token.
+   * Safe-fail: a submission error for one skill does not abort the loop.
+   */
+  pr_submitter?: PRSubmitter;
+
+  /**
+   * Optional Phase F World Shift configuration.
+   * When present, the runner captures an EnvironmentProfile at cycle start,
+   * compares it with the previous cycle's profile, and detects WorldShiftEvents.
+   * Detected shifts are:
+   *   1. Injected as advisory context into the Phase A system prompt.
+   *   2. Included in MorningResult.world_shift (DISPLAY-LAYER ONLY).
+   * If absent, MorningResult.world_shift is omitted and no env profiling occurs.
+   */
+  world_shift_config?: {
+    /**
+     * Directory where environment_profile.json is read and written.
+     * Typically phase14/data/.
+     */
+    env_profile_dir: string;
+
+    /**
+     * Absolute path to the project root (for package-lock.json + file tree hashing).
+     */
+    project_root: string;
+
+    /**
+     * Python executable for version detection. Default: 'python'.
+     */
+    python_executable?: string;
+
+    /**
+     * Benchmark signature from the most recent BenchmarkProvenance.
+     * Supplied by the caller after BenchmarkSandboxRunner completes a valid run.
+     * Default: 'unavailable'.
+     */
+    benchmark_signature?: string;
+  };
+
+  /**
+   * Optional Phase H OpenClaw Gateway instance.
+   * When present, the gateway is activated at cycle start (beginCycle) and its
+   * per-cycle summary is included in MorningResult.gateway_summary.
+   *
+   * The gateway provides a fail-closed entry point for all external automation
+   * requests from OpenClaw:
+   *   – LOW risk READ ops: query_morning_result, query_state, query_environment, list_pending_review
+   *   – MEDIUM risk WRITE ops: enqueue_candidate, approve_human_review, reject_human_review
+   *   – HIGH risk: always HARD_REJECT (requires explicit human review)
+   *
+   * GOVERNANCE BOUNDARY: the gateway MUST NOT influence tier evaluation, promotion
+   * gates, invariant checks, or any governance decision.
+   * DISPLAY-LAYER ONLY: gateway_summary appears in MorningResult.display.* only.
+   */
+  openclaw_gateway?: OpenClawGateway;
+
+  /**
+   * Optional path to the OpenClaw enqueue queue JSONL file.
+   * When present, the runner reads pending enqueue_candidate entries at the
+   * start of each TESTING phase and merges them into the Phase A candidate list.
+   * After consuming, the file is renamed to .consumed.<cycle_id>.jsonl so
+   * entries are never re-processed across cycles.
+   *
+   * Format: one JSON object per line (written by openclaw_cli.ts)
+   * {queued_at, request_id, target, patch_diff, rationale,
+   *  estimated_blast_radius, justification|null}
+   *
+   * Injected candidates pass through Phase B (sandbox) and Phase C (promotion
+   * gate) identically to LLM-generated candidates — no governance bypass.
+   */
+  openclaw_queue_path?: string;
+
+  /**
+   * Optional path for the AdaptationMemory JSONL file.
+   * When present, one AdaptationMemoryEntry is appended per promoted skill
+   * immediately after Phase C (before Phase D aggregation).
+   * Provides cross-cycle learning: what passed, in which environment, from
+   * which source — enabling quality control and dedup in future cycles.
+   * Safe-fail: write errors do not abort the nightly loop.
+   */
+  adaptation_memory_path?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -416,6 +552,335 @@ async function transitionTo(
 }
 
 // ---------------------------------------------------------------------------
+// SECTION 1c — Restart recovery
+// Implements nightly_state_machine.yaml §restart_recovery (5-step protocol).
+// ---------------------------------------------------------------------------
+
+/** Result of the startup TSM read + restart recovery protocol. */
+interface CycleResumeOutcome {
+  /** The cycle_id to use for this run (from persisted record or newly generated). */
+  cycle_id: string;
+  /** Whether execution resumes from a prior interrupted cycle. */
+  is_resume: boolean;
+  /** The TaskStateMachineStatus to start execution from. */
+  resume_from: TaskStateMachineStatus;
+  /** Whether F-011_STATE_LOSS_ON_RESTART was emitted (state file was unreadable/invalid). */
+  state_loss_detected: boolean;
+  /** ISO-8601 UTC when the TSM read was performed. */
+  startup_tsm_read_at: string;
+}
+
+/** The negative_constraint text for F-011 (matches initialize_failure_ledger.ts seed). */
+const F011_NEGATIVE_CONSTRAINT =
+  'Do NOT assume persisted task state is valid on restart. Always validate schema_version ' +
+  'and status enum on load. If the state file is unreadable or schema-invalid, abandon the ' +
+  'prior cycle and start fresh from OBSERVING.';
+
+/**
+ * 5-step restart recovery protocol (nightly_state_machine.yaml §restart_recovery).
+ *
+ * Step 1: Read task_state.json.  On thrown error → emit F-011, fresh start.
+ * Step 2: Validate schema_version + status enum.  On invalid → emit F-011, fresh start.
+ * Step 3: null record → fresh start, no F-011 (normal first run).
+ * Step 4: status=OBSERVING → fresh cycle with new cycle_id.
+ * Step 5: status=HYPOTHESIZING/TESTING/PROMOTING → resume with existing cycle_id.
+ */
+async function resumeFromTaskStateMachine(
+  store: LedgerStore,
+  new_cycle_id: string
+): Promise<CycleResumeOutcome> {
+  const startup_tsm_read_at = new Date().toISOString();
+  const VALID_STATUSES = new Set<string>(['OBSERVING', 'HYPOTHESIZING', 'TESTING', 'PROMOTING']);
+
+  let record: TaskStateMachineRecord | null;
+  try {
+    record = await store.readTaskStateMachine();
+  } catch {
+    // Step 1: read failure → F-011 + fresh start
+    try {
+      await store.incrementFailureLedgerCode('F-011_STATE_LOSS_ON_RESTART', F011_NEGATIVE_CONSTRAINT, new_cycle_id);
+    } catch { /* ledger write failure is non-fatal at startup */ }
+    await store.writeTaskStateMachine(makeTsmRecord(new_cycle_id, 'OBSERVING'));
+    return { cycle_id: new_cycle_id, is_resume: false, resume_from: 'OBSERVING', state_loss_detected: true, startup_tsm_read_at };
+  }
+
+  // Step 3: null → fresh start (normal first run, no F-011)
+  if (record === null) {
+    await store.writeTaskStateMachine(makeTsmRecord(new_cycle_id, 'OBSERVING'));
+    return { cycle_id: new_cycle_id, is_resume: false, resume_from: 'OBSERVING', state_loss_detected: false, startup_tsm_read_at };
+  }
+
+  // Step 2: validate schema_version + status
+  if (record.schema_version !== 'task_state/0.1' || !VALID_STATUSES.has(record.status)) {
+    try {
+      await store.incrementFailureLedgerCode('F-011_STATE_LOSS_ON_RESTART', F011_NEGATIVE_CONSTRAINT, new_cycle_id);
+    } catch { /* non-fatal */ }
+    await store.writeTaskStateMachine(makeTsmRecord(new_cycle_id, 'OBSERVING'));
+    return { cycle_id: new_cycle_id, is_resume: false, resume_from: 'OBSERVING', state_loss_detected: true, startup_tsm_read_at };
+  }
+
+  // Step 4: OBSERVING → fresh cycle
+  if (record.status === 'OBSERVING') {
+    return { cycle_id: new_cycle_id, is_resume: false, resume_from: 'OBSERVING', state_loss_detected: false, startup_tsm_read_at };
+  }
+
+  // Step 5: HYPOTHESIZING / TESTING / PROMOTING → resume
+  return {
+    cycle_id: record.cycle_id,
+    is_resume: true,
+    resume_from: record.status,
+    state_loss_detected: false,
+    startup_tsm_read_at,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// SECTION 1b — OpenClaw Queue Reader
+// Reads pending enqueue_candidate entries written by openclaw_cli.ts and
+// converts them to PatchCandidate objects ready for Phase B verification.
+// ---------------------------------------------------------------------------
+
+interface OpenClawEnqueueEntry {
+  queued_at: string;
+  request_id: string;
+  target: string;
+  patch_diff: unknown;
+  rationale: unknown;
+  estimated_blast_radius: unknown;
+  justification: string | null;
+}
+
+/** Minimum character length a rationale must have to pass quality control. */
+const OPENCLAW_MIN_RATIONALE_LENGTH = 20;
+
+/** Options for OpenClaw quality-control filtering. */
+interface OpenClawLoadOptions {
+  /**
+   * Current environment status from WorldShiftReport.
+   * When 'HOSTILE', all blast_radius values are overridden to 'SELF'.
+   */
+  environment_status?: string;
+  /**
+   * Recent AdaptationMemory entries used for deduplication.
+   * A candidate whose dedup_key matches any entry is skipped.
+   */
+  recent_memory?: AdaptationMemoryEntry[];
+  /**
+   * Path to the gateway audit JSONL file.
+   * When set, every queued entry must correlate to a PASS gateway decision.
+   */
+  gateway_audit_path?: string;
+  /**
+   * Optional ledger store for emitting F-018 on constitutional bypass.
+   */
+  ledger_store?: LedgerStore;
+}
+
+const F018_NEGATIVE_CONSTRAINT =
+  'No action may reach Phase A without a matching GatewayDecision(verdict=PASS). ' +
+  'Any candidate that cannot be correlated to a gateway audit record is treated as ' +
+  'a constitutional bypass and hard-rejected.';
+
+function loadGatewayPassRequestIds(audit_path: string | undefined): Set<string> | null {
+  if (!audit_path || !fs.existsSync(audit_path)) {
+    return null;
+  }
+
+  const pass_ids = new Set<string>();
+  const lines = fs.readFileSync(audit_path, 'utf8')
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean);
+
+  for (const line of lines) {
+    try {
+      const parsed = JSON.parse(line) as { request_id?: unknown; verdict?: unknown };
+      if (parsed.verdict === 'PASS' && typeof parsed.request_id === 'string') {
+        pass_ids.add(parsed.request_id);
+      }
+    } catch {
+      console.warn('[OpenClaw Queue] Skipping malformed gateway audit line during correlation check');
+    }
+  }
+
+  return pass_ids;
+}
+
+/**
+ * Read all pending entries from the OpenClaw enqueue queue JSONL file.
+ * After consuming, renames the file to .consumed.<cycle_id>.jsonl so entries
+ * are never re-processed in a future cycle.
+ *
+ * Quality controls (in order):
+ *   1. Rationale length ≥ OPENCLAW_MIN_RATIONALE_LENGTH characters
+ *   2. At least 1 non-header diff line (+/-) in patch_diff
+ *   3. Dedup: skip if dedup_key matches any entry in recent_memory
+ *   4. Environment gate: override blast_radius to 'SELF' when HOSTILE
+ *
+ * Returns [] when:
+ *   - queue_path is undefined (feature not configured)
+ *   - queue file does not exist (nothing queued this cycle)
+ *   - an entry is malformed (skipped with console.warn; other entries still loaded)
+ */
+async function loadOpenClawCandidates(
+  queue_path: string | undefined,
+  cycle_id: string,
+  options: OpenClawLoadOptions = {}
+): Promise<PatchCandidate[]> {
+  if (!queue_path || !fs.existsSync(queue_path)) {
+    return [];
+  }
+
+  const raw_lines = fs.readFileSync(queue_path, 'utf8')
+    .split('\n')
+    .map((l) => l.trim())
+    .filter(Boolean);
+
+  if (raw_lines.length === 0) {
+    return [];
+  }
+
+  const candidates: PatchCandidate[] = [];
+  const gateway_pass_ids = loadGatewayPassRequestIds(options.gateway_audit_path);
+
+  for (const line of raw_lines) {
+    let entry: OpenClawEnqueueEntry;
+    try {
+      entry = JSON.parse(line) as OpenClawEnqueueEntry;
+    } catch {
+      console.warn('[OpenClaw Queue] Skipping malformed entry (JSON parse error):', line.slice(0, 80));
+      continue;
+    }
+
+    const patch_diff = typeof entry.patch_diff === 'string' ? entry.patch_diff : '';
+    const rationale  = typeof entry.rationale  === 'string' ? entry.rationale  : '(no rationale)';
+    const blast_radius_raw = typeof entry.estimated_blast_radius === 'string'
+      ? entry.estimated_blast_radius.toUpperCase()
+      : 'SELF';
+    const blast_radius: 'SELF' | 'TENANT' | 'GLOBAL' =
+      blast_radius_raw === 'TENANT' ? 'TENANT'
+      : blast_radius_raw === 'GLOBAL' ? 'GLOBAL'
+      : 'SELF';
+
+    if (!patch_diff) {
+      console.warn(`[OpenClaw Queue] Skipping entry ${entry.request_id}: empty patch_diff`);
+      continue;
+    }
+
+    // ── Quality control 1: rationale length ────────────────────────────
+    if (rationale === '(no rationale)' || rationale.length < OPENCLAW_MIN_RATIONALE_LENGTH) {
+      console.warn(
+        `[OpenClaw Queue] Skipping entry ${entry.request_id}: rationale too short` +
+        ` (${rationale.length} < ${OPENCLAW_MIN_RATIONALE_LENGTH} chars)`
+      );
+      continue;
+    }
+
+    // ── Quality control 2: minimum patch change lines ──────────────────
+    const change_lines = patch_diff
+      .split('\n')
+      .filter((l) => !l.startsWith('+++') && !l.startsWith('---') && (l.startsWith('+') || l.startsWith('-')))
+      .length;
+    if (change_lines === 0) {
+      console.warn(
+        `[OpenClaw Queue] Skipping entry ${entry.request_id}: patch_diff has no change lines (+/-)`
+      );
+      continue;
+    }
+
+    // ── Quality control 3: dedup check ─────────────────────────────────
+    const candidate_title = `[OpenClaw] ${rationale.slice(0, 120)}`;
+    const target_path     = entry.target ? entry.target : '';
+    const dedup_key       = computeDedupKey(candidate_title, target_path ? [target_path] : []);
+    if (options.recent_memory && options.recent_memory.some((m) => m.dedup_key === dedup_key)) {
+      console.warn(
+        `[OpenClaw Queue] Skipping entry ${entry.request_id}: duplicate of a recently promoted skill` +
+        ` (dedup_key="${dedup_key}")`
+      );
+      continue;
+    }
+
+    // ── Quality control 4: environment gate ────────────────────────────
+    // HOSTILE environment → restrict blast radius to SELF regardless of submission
+    const effective_blast_radius: 'SELF' | 'TENANT' | 'GLOBAL' =
+      options.environment_status === 'HOSTILE' ? 'SELF' : blast_radius;
+    if (options.environment_status === 'HOSTILE' && blast_radius !== 'SELF') {
+      console.log(
+        `[OpenClaw Queue] Entry ${entry.request_id}: HOSTILE environment — ` +
+        `blast_radius downgraded ${blast_radius} → SELF`
+      );
+    }
+
+    // ── Quality control 5: gateway correlation check ───────────────────
+    if (gateway_pass_ids !== null && !gateway_pass_ids.has(entry.request_id)) {
+      console.warn(
+        `[OpenClaw Queue] Skipping entry ${entry.request_id}: no correlated GatewayDecision(PASS)`
+      );
+      if (options.ledger_store) {
+        await options.ledger_store.incrementFailureLedgerCode(
+          'F-018_CONSTITUTIONAL_BYPASS',
+          F018_NEGATIVE_CONSTRAINT,
+          cycle_id
+        );
+      }
+      continue;
+    }
+
+    const candidate: PatchCandidate = {
+      candidate_id: randomUUID(),
+      generated_at: entry.queued_at,
+      cycle_id,
+      title: candidate_title,
+      affected_targets: entry.target
+        ? [{ file_path: entry.target, change_type: 'modify' as const }]
+        : [],
+      estimated_blast_radius: effective_blast_radius,
+      patch_diff,
+      acceptance_criteria: {
+        invariant_check: [],
+        measurable_outcome: {
+          stability_index_delta: 'neutral',
+          refined_code_lines_predicted: 1,
+          measurement_basis: {
+            source: 'openclaw_external',
+            request_id: entry.request_id,
+            queued_at: entry.queued_at,
+            justification: entry.justification ?? null,
+          },
+        },
+        no_regression: {
+          regression_test_ids_verified_pass: [],
+          invariant_ids_untouched: [],
+          orthogonality_rationale:
+            'External patch submitted via OpenClaw CLI — orthogonality asserted by submitter. ' +
+            'Phase B sandbox will verify.',
+        },
+      },
+      negative_constraint_violations: [],
+    };
+
+    candidates.push(candidate);
+  }
+
+  if (candidates.length > 0) {
+    // Rename consumed queue to prevent re-processing on the next cycle
+    const consumed_path = queue_path.replace(/\.jsonl$/, '') + `.consumed.${cycle_id}.jsonl`;
+    try {
+      fs.renameSync(queue_path, consumed_path);
+      console.log(
+        `[OpenClaw Queue] Consumed ${candidates.length} candidate(s) → ${path.basename(consumed_path)}`
+      );
+    } catch (rename_err) {
+      // Non-fatal: log and continue; entries will be re-read next cycle but
+      // candidate_ids will be different so Phase B won't confuse them.
+      console.warn('[OpenClaw Queue] Failed to rename consumed queue file:', rename_err);
+    }
+  }
+
+  return candidates;
+}
+
+// ---------------------------------------------------------------------------
 // SECTION 2 — Phase A: Observe + Hypothesize
 // ---------------------------------------------------------------------------
 
@@ -426,7 +891,7 @@ async function runPhaseAObserving(
   config: NightlyLoopConfig,
   max_candidates_override?: number,  // Phase E ②: cap from previous cycle's drift adaptation
   blast_radius_ceiling?: 'SELF' | 'TENANT' | 'GLOBAL' | null  // Phase E ②: ceiling from drift adaptation
-): Promise<{ system_prompt: string; user_prompt: string }> {
+): Promise<{ system_prompt: string; user_prompt: string; stressed_invariant_ids: string[] }> {
   const input_pack = assemblePhaseAInputPack({
     cycle_id,
     ledger: ledger_snapshot,
@@ -440,6 +905,13 @@ async function runPhaseAObserving(
     blast_radius_ceiling: blast_radius_ceiling ?? null,
   });
 
+  // Extract InvariantStressSeed IDs so the hint block can boost matching entries
+  const stressed_invariant_ids = input_pack.world_state.focus_seeds.seeds
+    .filter((s): s is typeof s & { seed_type: 'invariant_stress'; invariant_id: string } =>
+      s.seed_type === 'invariant_stress'
+    )
+    .map((s) => s.invariant_id);
+
   const audit_dir = path.join(config.run_dir, 'audit');
   const { system, user } = await renderPhaseAPromptPair(
     ctx.phase_a_system_template,
@@ -448,7 +920,7 @@ async function runPhaseAObserving(
     audit_dir
   );
 
-  return { system_prompt: system, user_prompt: user };
+  return { system_prompt: system, user_prompt: user, stressed_invariant_ids };
 }
 
 async function runPhaseAHypothesizing(
@@ -528,10 +1000,62 @@ export async function runNightlyLoop(
     fs.mkdirSync(d, { recursive: true });
   }
 
-  // ── Read existing TSM to determine resume point ───────────────────────────
-  let tsm = await ctx.ledger_store.readTaskStateMachine();
-  const is_resuming = tsm !== null && tsm.status !== 'OBSERVING';
-  const cycle_id: string = (tsm && is_resuming) ? tsm.cycle_id : randomUUID();
+  // ── Restart recovery: TSM read + F-011 detection ─────────────────────────
+  // Implements nightly_state_machine.yaml §restart_recovery (5-step protocol).
+  const resume_outcome = await resumeFromTaskStateMachine(ctx.ledger_store, randomUUID());
+  const cycle_id = resume_outcome.cycle_id;
+  if (resume_outcome.state_loss_detected) {
+    console.warn(
+      `[TSM] F-011 emitted — task_state.json was invalid on startup, reset to OBSERVING ` +
+      `(new cycle_id=${cycle_id})`
+    );
+  } else if (resume_outcome.is_resume) {
+    console.log(
+      `[TSM] Resuming interrupted cycle ${cycle_id} from ${resume_outcome.resume_from}`
+    );
+  }
+
+  // Phase H: Activate OpenClaw Gateway for this cycle (reset per-cycle counters).
+  // Must be called before any external requests are processed.
+  ctx.openclaw_gateway?.beginCycle(cycle_id);
+
+  // ── Phase F: Environment Profiling + World Shift Detection ────────────────
+  // Capture the current EnvironmentProfile, compare with previous cycle's,
+  // and build a WorldShiftReport (DISPLAY-LAYER ONLY — does not affect governance).
+  let world_shift_report: WorldShiftReport | undefined = undefined;
+  let env_profile_path: string | null = null;
+
+  if (ctx.world_shift_config) {
+    try {
+      const wsc = ctx.world_shift_config;
+      env_profile_path = path.join(wsc.env_profile_dir, 'environment_profile.json');
+      const prev_profile = readEnvironmentProfile(env_profile_path);
+      const curr_profile = captureEnvironmentProfile({
+        project_root: wsc.project_root,
+        python_executable: wsc.python_executable ?? 'python',
+        model_id: process.env['GEMINI_MODEL'] ?? 'gemini-2.0-flash',
+        benchmark_signature: wsc.benchmark_signature ?? 'unavailable',
+      });
+      const shift_events = detectWorldShift(prev_profile, curr_profile, cycle_id);
+      world_shift_report = buildWorldShiftReport(shift_events, curr_profile, prev_profile);
+
+      if (world_shift_report.any_shift_detected) {
+        console.log(
+          `[Phase F] WorldShift detected: ${world_shift_report.environment_status} / ` +
+          `${world_shift_report.biome} — ` +
+          world_shift_report.shift_events.map((e) => e.description).join('; ')
+        );
+      }
+
+      // Persist current profile NOW so it survives even if the loop errors later.
+      // At cycle end (after MorningResult), it will be re-written identically (idempotent).
+      writeEnvironmentProfile(curr_profile, env_profile_path);
+    } catch (wse) {
+      // World Shift detection errors are non-fatal — continue without shift report
+      console.warn('[Phase F] Environment profiling error (non-fatal):', wse);
+      world_shift_report = undefined;
+    }
+  }
 
   // ── Build ledger snapshot (needed for Phase A) ────────────────────────────
   const stability_index = ctx.system_state_snapshot.stability_index_score;
@@ -575,10 +1099,7 @@ export async function runNightlyLoop(
 
   try {
     // ── Determine resume strategy ──────────────────────────────────────────
-    let resume_from: TaskStateMachineStatus = 'OBSERVING';
-    if (is_resuming && tsm) {
-      resume_from = tsm.status;
-    }
+    const resume_from = resume_outcome.resume_from;
 
     // ── Phase E ②: Read previous cycle's drift adaptation ─────────────────
     // Provides max_candidates_override for Phase A (exploration rate cap)
@@ -612,13 +1133,89 @@ export async function runNightlyLoop(
       final_phase = 'HYPOTHESIZING';
 
       // Render Phase A prompts
-      const { system_prompt, user_prompt } = await runPhaseAObserving(
+      const {
+        system_prompt: raw_system_prompt,
+        user_prompt,
+        stressed_invariant_ids,
+      } = await runPhaseAObserving(
         ctx, cycle_id, ledger_snapshot, config, effective_max_candidates,
         prev_adaptation?.blast_radius_ceiling ?? null
       );
 
+      // ── Phase F: Inject World Shift context into system prompt ────────────
+      // Substitutes {{WORLD_SHIFT_CONTEXT_BLOCK}} that was added to
+      // PHASE14_SYSTEM_TEMPLATE. ADVISORY ONLY — does not change governance.
+      let system_prompt = raw_system_prompt;
+      const SHIFT_SLOT = '{{WORLD_SHIFT_CONTEXT_BLOCK}}';
+      if (system_prompt.includes(SHIFT_SLOT)) {
+        const shift_block = world_shift_report?.any_shift_detected
+          ? `世界シフトが検出されました:\n` +
+            world_shift_report.shift_events
+              .map((e) => `  - [${e.severity}] ${e.description} → Biome: ${e.biome}`)
+              .join('\n') +
+            `\n\n環境ステータス: ${world_shift_report.environment_status}\n` +
+            `このサイクルでは保守的なパッチ（blast_radius=SELF）を優先し、環境変化に対して安全な改善を選択すること。`
+          : '（なし — 環境変化は検出されていません）';
+        system_prompt = system_prompt.replace(SHIFT_SLOT, shift_block);
+      }
+
+      // ── Phase A: Inject AdaptationMemory hints into system prompt ─────────
+      // Substitutes {{ADAPTATION_HINT_BLOCK}} in PHASE14_SYSTEM_TEMPLATE.
+      // ADVISORY ONLY — the LLM may take inspiration but MUST NOT reproduce
+      // entries verbatim.  No governance weights are changed.
+      const HINT_SLOT = '{{ADAPTATION_HINT_BLOCK}}';
+      if (system_prompt.includes(HINT_SLOT)) {
+        const hint_block = ctx.adaptation_memory_path
+          ? buildAdaptationHintBlock(ctx.adaptation_memory_path, {
+              exclude_cycle_id:              cycle_id,
+              current_environment_status:    world_shift_report?.environment_status as string | undefined,
+              current_stressed_invariant_ids: stressed_invariant_ids.length > 0
+                ? stressed_invariant_ids
+                : undefined,
+            })
+          : '（なし — adaptation_memory_path が設定されていません）';
+        system_prompt = system_prompt.replace(HINT_SLOT, hint_block);
+      }
+
+      // ── Phase G3: Inject meta-strategy block ─────────────────────────────
+      // Substitutes {{ADAPTATION_META_STRATEGY_BLOCK}} in PHASE14_SYSTEM_TEMPLATE.
+      // ADVISORY ONLY — aggregated pattern data, no individual entry is surfaced.
+      const META_SLOT = '{{ADAPTATION_META_STRATEGY_BLOCK}}';
+      if (system_prompt.includes(META_SLOT)) {
+        const meta_block = ctx.adaptation_memory_path
+          ? buildMetaStrategyBlock(ctx.adaptation_memory_path)
+          : '（なし — adaptation_memory_path が設定されていません）';
+        system_prompt = system_prompt.replace(META_SLOT, meta_block);
+      }
+
       // Call LLM dispatcher
       candidate_list = await runPhaseAHypothesizing(ctx, cycle_id, system_prompt, user_prompt);
+
+      // ── Phase H: Inject OpenClaw enqueue queue candidates ─────────────
+      // Reads pending enqueue_candidate entries written by openclaw_cli.ts.
+      // These flow through Phase B (sandbox) + Phase C (promotion gate)
+      // identically to LLM-generated candidates — no governance bypass.
+      // Quality controls: rationale length, patch change lines, dedup, env gate.
+      const openclaw_candidates = await loadOpenClawCandidates(ctx.openclaw_queue_path, cycle_id, {
+        environment_status: world_shift_report?.environment_status as string | undefined,
+        recent_memory: ctx.adaptation_memory_path
+          ? loadRecentAdaptationMemory(ctx.adaptation_memory_path, 50)
+          : undefined,
+        gateway_audit_path: ctx.openclaw_queue_path
+          ? path.join(path.dirname(ctx.openclaw_queue_path), 'openclaw_gateway_audit.jsonl')
+          : undefined,
+        ledger_store: ctx.ledger_store,
+      });
+      if (openclaw_candidates.length > 0) {
+        candidate_list = {
+          ...candidate_list,
+          candidates: [...candidate_list.candidates, ...openclaw_candidates],
+        };
+        console.log(
+          `[Phase H] Merged ${openclaw_candidates.length} OpenClaw candidate(s) into Phase A list` +
+          ` (total: ${candidate_list.candidates.length})`
+        );
+      }
 
       // Transition to TESTING now that we have candidates
       await transitionTo(
@@ -820,6 +1417,131 @@ export async function runNightlyLoop(
       }
     }
 
+    // ── PR Submission (PROMOTED → GitHub Draft PR) ─────────────────────
+    // Called after all PROMOTING activity (including human-review injection)
+    // and before Phase D aggregation, so the PR count is visible in the
+    // morning result but the loop is never blocked by a submission failure.
+    if (ctx.pr_submitter && c_result && b_result && c_result.promoted_count > 0) {
+      try {
+        const pr_results = await ctx.pr_submitter.submitPromotedSkills(c_result, b_result);
+        const created = pr_results.filter((r) => r.status === 'created');
+        const failed  = pr_results.filter((r) => r.status === 'failed');
+        if (created.length > 0) {
+          console.log(`[Phase C → PR] ${created.length} PR(s) opened:`);
+          for (const r of created) {
+            console.log(`  #${r.pr_number} ${r.pr_url}`);
+          }
+        }
+        if (failed.length > 0) {
+          for (const r of failed) {
+            console.warn(`[Phase C → PR] Failed for skill ${r.skill_id}: ${r.error}`);
+          }
+        }
+      } catch (pr_err) {
+        // Safe-fail: PR submission errors must never abort the nightly loop
+        console.warn('[Phase C → PR] Submission error (non-fatal):', pr_err);
+      }
+    }
+
+    // ── ReviewQueue Write (DEFERRED_HUMAN → review_queue.json) ────────────
+    // Patches deferred by Phase C (blast_radius=GLOBAL or F-020 TENANT path)
+    // are persisted to review_queue.json so the human review UI can surface them.
+    // Safe-fail: ReviewQueue write errors must never abort the nightly loop.
+    if (ctx.human_review_store && c_result && b_result) {
+      try {
+        const deferred = c_result.gate_results.filter(
+          (r) => r.disposition === 'DEFERRED_HUMAN' && r.human_review_event !== null
+        );
+
+        if (deferred.length > 0) {
+          // Build a fast lookup: VerifiedPatch.candidate_id → VerifiedPatch
+          const vp_map = new Map(b_result.verified.map((vp) => [vp.candidate_id, vp]));
+
+          const new_entries = buildReviewQueueEntries(
+            deferred.map((r) => {
+              const vp = vp_map.get(r.candidate_id);
+              return {
+                candidate_id:       r.candidate_id,
+                human_review_event: r.human_review_event,
+                blast_radius:       vp?.source_candidate.estimated_blast_radius === 'GLOBAL'
+                                      ? 'GLOBAL' as const
+                                      : 'TENANT' as const,
+              };
+            }),
+            deferred.map((r) => {
+              const vp = vp_map.get(r.candidate_id);
+              return {
+                candidate_id:    r.candidate_id,
+                title:           vp?.source_candidate.title                                    ?? r.candidate_id,
+                description:     '',  // PatchCandidate has no description field
+                affected_targets: (vp?.source_candidate.affected_targets ?? []).map((t) => t.file_path),
+                confidence_score: 0,  // VerifiedPatch has no top-level confidence_weight
+                source_cycle_id: cycle_id,
+                attribution:     vp?.source_candidate.attribution ?? null,
+              };
+            })
+          );
+
+          const current_queue = await ctx.human_review_store.readReviewQueue();
+          const updated_queue = mergeIntoReviewQueue(current_queue, new_entries);
+          await ctx.human_review_store.writeReviewQueue(updated_queue);
+
+          console.log(
+            `[ReviewQueue] ${new_entries.length} entr${
+              new_entries.length === 1 ? 'y' : 'ies'
+            } persisted → review_queue.json`
+          );
+        }
+      } catch (rq_err) {
+        // Safe-fail: ReviewQueue write errors must never abort the nightly loop
+        console.warn('[ReviewQueue] Write error (non-fatal):', rq_err);
+      }
+    }
+
+    // ── AdaptationMemory Write (per promoted skill) ──────────────────────
+    if (ctx.adaptation_memory_path && c_result && c_result.promoted_skills.length > 0 && b_result) {
+      try {
+        // Build a fast lookup: VerifiedPatch.candidate_id → VerifiedPatch
+        const vp_map = new Map(b_result.verified.map((vp) => [vp.candidate_id, vp]));
+
+        // Load reuse stats so hint_score includes the reuse_bonus at write time
+        const stats_path = ctx.adaptation_memory_path.replace(/\.jsonl$/, '_reuse_stats.json');
+        const reuse_stats = loadReuseStats(stats_path);
+
+        const entries = c_result.promoted_skills.map((skill) => {
+          const vp = vp_map.get(skill.source_verified_patch_id);
+          const dk = computeDedupKey(skill.title, skill.affected_targets);
+          const reused_count = reuse_stats[dk]?.reused_count ?? 0;
+          return buildAdaptationMemoryEntry(skill, cycle_id, {
+            patch_source: skill.title.startsWith('[OpenClaw]') ? 'openclaw' : 'llm',
+            world_shift_report: world_shift_report ?? null,
+            tier_at_promotion: null,  // Phase D computes tier after this write
+            drift_stable_at_promotion: !(adaptation?.promotion_blocked),
+            estimated_blast_radius: vp?.source_candidate.estimated_blast_radius,
+            patch_diff: vp?.source_candidate.patch_diff,
+            reused_count,
+            attribution_snapshot: vp?.source_candidate.attribution ?? null,
+          });
+        });
+
+        appendAdaptationMemoryEntries(entries, ctx.adaptation_memory_path);
+        console.log(
+          `[AdaptationMemory] ${entries.length} entr${entries.length === 1 ? 'y' : 'ies'} written` +
+          ` → ${path.basename(ctx.adaptation_memory_path)}`
+        );
+
+        // Update reuse stats sidecar: detect re-promoted dedup_keys
+        updateReuseStats(entries, ctx.adaptation_memory_path, stats_path);
+
+        // Update environment-specific score sidecar (Phase G2)
+        const env_scores_path = ctx.adaptation_memory_path.replace(/\.jsonl$/, '_env_scores.json');
+        updateEnvScores(entries, env_scores_path);
+      } catch (mem_err) {
+        // Safe-fail: memory write errors must never abort the nightly loop
+        console.warn('[AdaptationMemory] Write error (non-fatal):', mem_err);
+      }
+    }
+
     // ── AGGREGATING (Phase D) ─────────────────────────────────────────────
     final_phase = 'AGGREGATING';
 
@@ -869,6 +1591,29 @@ export async function runNightlyLoop(
       legitimacy_tier: ctx.legitimacy_tier,
       drift_metrics: drift_metrics_pre_c,
       drift_adaptation: adaptation,
+      world_shift: world_shift_report,
+      gateway_cycle_summary: ctx.openclaw_gateway?.buildCycleSummary(cycle_id),
+      adaptation_memory_path: ctx.adaptation_memory_path,
+      nightly_audit: (() => {
+        const newly: FailureLedgerCode[] = [
+          ...(resume_outcome.state_loss_detected
+            ? ['F-011_STATE_LOSS_ON_RESTART' as FailureLedgerCode]
+            : []),
+          ...b_result.rejected
+            .filter((r) => r.failure_ledger_write != null)
+            .map((r) => r.failure_ledger_write!.code),
+        ];
+        return {
+          schema_version: 'nightly_cycle_audit/0.1' as const,
+          cycle_id,
+          final_state: 'OBSERVING' as const,
+          was_resume: resume_outcome.is_resume,
+          state_loss_on_startup: resume_outcome.state_loss_detected,
+          startup_tsm_read_at: resume_outcome.startup_tsm_read_at,
+          newly_triggered_codes: [...new Set(newly)],
+          active_ledger_count: active_failure_ledger_d.length,
+        };
+      })(),
     };
 
     const morning_result = await aggregateMorningResult(phase_d_pack, {
@@ -1033,6 +1778,28 @@ export class FilesystemLedgerStore implements LedgerStore {
 
   async readFailureLedger(): Promise<FailureLedgerEntry[]> {
     return this.read<FailureLedgerEntry[]>('failure_ledger.json', []);
+  }
+
+  async incrementFailureLedgerCode(
+    code: FailureLedgerCode,
+    negative_constraint: string,
+    cycle_id: string
+  ): Promise<void> {
+    const ledger = await this.readFailureLedger();
+    const idx = ledger.findIndex((e) => e.code === code);
+    if (idx >= 0) {
+      ledger[idx]!.occurrence_count += 1;
+      ledger[idx]!.last_observed_cycle_id = cycle_id;
+    } else {
+      ledger.push({
+        code,
+        first_observed_cycle_id: cycle_id,
+        last_observed_cycle_id: cycle_id,
+        occurrence_count: 1,
+        negative_constraint,
+      });
+    }
+    this.write('failure_ledger.json', ledger);
   }
 
   async applyFailureLedgerWrites(b_result: PhaseBBatchResult, cycle_id: string): Promise<void> {

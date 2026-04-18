@@ -107,6 +107,22 @@ export interface BenchmarkSandboxConfig {
    * Default: randomUUID at sandbox open time.
    */
   run_id?: string;
+
+  /**
+   * When true (default), blocks all external network access from the bench subprocess
+   * by overriding HTTP_PROXY / HTTPS_PROXY / no_proxy environment variables.
+   * Set to false only with explicit Human sign-off (Boundary #10).
+   * Default: true.
+   */
+  deny_external_network?: boolean;
+
+  /**
+   * Explicit allowlist of hosts permitted to be reached.
+   * Only consulted when deny_external_network is false.
+   * Format: hostname[:port] strings.
+   * Default: [] (no external hosts allowed).
+   */
+  allowed_egress_hosts?: string[];
 }
 
 // ---------------------------------------------------------------------------
@@ -143,7 +159,8 @@ function runBenchScript(
   patched_dir: string | null,
   iterations: number,
   repetitions: number,
-  out_json: string | null
+  out_json: string | null,
+  deny_external_network: boolean
 ): RawBenchResult {
   const args: string[] = [
     bench_script,
@@ -158,9 +175,22 @@ function runBenchScript(
     args.push('--out-json', out_json);
   }
 
+  const egress_env: NodeJS.ProcessEnv = deny_external_network
+    ? {
+        ...process.env,
+        HTTP_PROXY: '',
+        HTTPS_PROXY: '',
+        http_proxy: '',
+        https_proxy: '',
+        no_proxy: '*',
+        NO_PROXY: '*',
+      }
+    : { ...process.env };
+
   const result = spawnSync(python_exe, args, {
     encoding: 'utf8',
     timeout: 60_000, // 60s hard cap
+    env: egress_env,
   });
 
   if (result.error) {
@@ -292,7 +322,8 @@ function makeBenchmarkSandboxHandle(
 
       const git_result = spawnSync('git', [
         'apply',
-        '--directory', patched_scripts_dir,
+        '-p3',                               // diff は a/phase14/scripts/X.py 形式 → 3 要素剥がす
+        '--directory', patched_scripts_dir,  // 残り X.py を patched_scripts_dir/ に配置
         '--ignore-whitespace',
         diff_path,
       ], {
@@ -333,6 +364,7 @@ function makeBenchmarkSandboxHandle(
         config.iterations,
         config.repetitions,
         out_sidecar,
+        config.deny_external_network !== false,
       );
 
       last_provenance = _toProvenance(raw);
@@ -423,6 +455,8 @@ export class BenchmarkSandboxRunner implements SandboxRunner {
       stability_index_baseline: 0.74,
       drift_monitor: undefined,
       run_id: undefined,
+      deny_external_network: true,
+      allowed_egress_hosts: [],
       ...config,
     };
   }

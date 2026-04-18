@@ -2,6 +2,7 @@ declare const __dirname: string;
 declare const process: {
   argv: string[];
   execPath: string;
+  env: Record<string, string | undefined>;
   cwd(): string;
   on(event: string, listener: (...args: any[]) => void): void;
   exit(code?: number): never;
@@ -54,6 +55,7 @@ declare module 'node:process' {
   const process: {
     argv: string[];
     execPath: string;
+    env: Record<string, string | undefined>;
     cwd(): string;
     on(event: string, listener: (...args: any[]) => void): void;
     exit(code?: number): never;
