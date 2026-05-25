@@ -17,8 +17,9 @@ name: Nightly Repo Caretaker
 #
 # Cross-repo auth contract:
 #   repo_caretaker.ts reads CI/PR state across multiple repositories.
-#   Use CARETAKER_GH_TOKEN (PAT or GitHub App token) with cross-repo read.
-#   GITHUB_TOKEN (repo-scoped) is insufficient for org-wide observation.
+#   If CARETAKER_GH_TOKEN is configured, the workflow observes all tracked repos.
+#   If it is not configured, the workflow falls back to SELF scope and observes
+#   only project-manuals with the repo-scoped GITHUB_TOKEN.
 # ─────────────────────────────────────────────────────────────────────────────
 
 on:
@@ -48,6 +49,7 @@ jobs:
     timeout-minutes: 15
 
     permissions:
+      actions: read
       contents: read
       pull-requests: read
 
@@ -71,33 +73,46 @@ jobs:
       - name: Build
         run: ./node_modules/.bin/tsc
 
-      - name: Validate cross-repo auth token
+      - name: Validate caretaker auth
         env:
-          GH_TOKEN: ${{ secrets.CARETAKER_GH_TOKEN }}
+          GH_TOKEN: ${{ secrets.CARETAKER_GH_TOKEN || github.token }}
+          CARETAKER_REPO_SCOPE: ${{ secrets.CARETAKER_GH_TOKEN != '' && 'all' || 'self' }}
+          REPO: ${{ github.repository }}
         run: |
           if [ -z "$GH_TOKEN" ]; then
-            echo "::error::Missing CARETAKER_GH_TOKEN secret (required for cross-repo observation)."
+            echo "::error::No GitHub token available for caretaker observation."
             exit 1
           fi
 
           gh auth status >/dev/null 2>&1 || {
-            echo "::error::gh auth status failed with CARETAKER_GH_TOKEN"
+            echo "::error::gh auth status failed for caretaker token"
             exit 1
           }
 
-          # Probe at least one external repo to avoid silent all-skipped runs
-          gh run list \
-            --repo zerospawn01-coder/aesthetic-resonator \
-            --limit 1 \
-            --json databaseId >/dev/null 2>&1 || {
-              echo "::error::Caretaker token cannot read external repos; cross-repo observe would silently skip."
-              exit 1
-            }
+          if [ "$CARETAKER_REPO_SCOPE" = "all" ]; then
+            gh run list \
+              --repo zerospawn01-coder/aesthetic-resonator \
+              --limit 1 \
+              --json databaseId >/dev/null 2>&1 || {
+                echo "::error::Caretaker token cannot read external repos; cross-repo observe would silently skip."
+                exit 1
+              }
+          else
+            gh run list \
+              --repo "$REPO" \
+              --limit 1 \
+              --json databaseId >/dev/null 2>&1 || {
+                echo "::error::Caretaker token cannot read current repo."
+                exit 1
+              }
+            echo "::notice::CARETAKER_GH_TOKEN is not configured; running caretaker in SELF scope."
+          fi
 
       - name: Run caretaker (Layer 1+2+3)
         id: observe
         env:
-          GH_TOKEN: ${{ secrets.CARETAKER_GH_TOKEN }}
+          GH_TOKEN: ${{ secrets.CARETAKER_GH_TOKEN || github.token }}
+          CARETAKER_REPO_SCOPE: ${{ secrets.CARETAKER_GH_TOKEN != '' && 'all' || 'self' }}
           DRY_RUN_FLAG: ${{ inputs.dry_run == true && '--dry-run' || '' }}
         run: |
           CYCLE_DATE=$(date '+%Y-%m-%d')
@@ -177,7 +192,7 @@ jobs:
 
       - name: Process SAFE_AUTO_PR findings
         env:
-          GH_TOKEN:   ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN:   ${{ github.token }}
           REPO:       ${{ github.repository }}
           CYCLE_DATE: ${{ needs.caretaker-observe.outputs.cycle_date }}
           GIT_USER:   'github-actions[bot]'

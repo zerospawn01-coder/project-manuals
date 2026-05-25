@@ -45,6 +45,7 @@ const RUN_RESULT_PATH  = path.join(PHASE14_DIR, 'caretaker_morning_result.latest
 const JSON_MODE   = process.argv.includes('--json');
 const DRY_RUN     = process.argv.includes('--dry-run');
 const EXECUTE     = process.argv.includes('--execute');
+const REPO_SCOPE  = (process.env.CARETAKER_REPO_SCOPE ?? 'all').toLowerCase();
 
 // ── Repository manifest ────────────────────────────────────────────────────
 
@@ -68,6 +69,16 @@ const REPOS: RepoTarget[] = [
   { owner: 'zerospawn01-coder', repo: 'mtp-weaver',           default_branch: 'main',                    risk_tier: 'TENANT' },
   { owner: 'zerospawn01-coder', repo: 'lab-experiments',      default_branch: 'main',                    risk_tier: 'TENANT' },
 ];
+
+function selectedRepos(): RepoTarget[] {
+  if (REPO_SCOPE === 'self') {
+    return REPOS.filter((repo) => repo.risk_tier === 'SELF');
+  }
+  if (REPO_SCOPE === 'all') {
+    return REPOS;
+  }
+  throw new Error(`Unsupported CARETAKER_REPO_SCOPE: ${REPO_SCOPE}`);
+}
 
 // ── Layer 1: Observation types ─────────────────────────────────────────────
 
@@ -843,7 +854,9 @@ function main(): void {
   // Layer 1: Observe
   section('Layer 1: Observing repositories');
   const observations: RepoObservation[] = [];
-  for (const target of REPOS) {
+  const targets = selectedRepos();
+  log(`  scope: ${REPO_SCOPE} (${targets.length} repo target${targets.length === 1 ? '' : 's'})`);
+  for (const target of targets) {
     log(`  → ${target.owner}/${target.repo} (${target.risk_tier})`);
     const obs = observeRepo(target);
     observations.push(obs);
