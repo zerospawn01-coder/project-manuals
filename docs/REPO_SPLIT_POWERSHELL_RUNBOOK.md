@@ -212,6 +212,30 @@ The optimized first-pass repository set is:
 - `git` available in PowerShell
 - Python available in PowerShell
 - `git-filter-repo` installable via `python -m pip`
+- Repo split helper scripts are present in this repository under `tools/`
+  (not `.tools/`):
+  - `tools/repo_split_plan.ps1`
+  - `tools/repo_split_copy.ps1`
+  - `tools/repo_split_filter_repo.ps1`
+  - `tools/repo_split_archive.ps1`
+
+Validate helper scripts before executing any runbook command that writes,
+archives, filters, or pushes:
+
+```powershell
+$requiredScripts = @(
+  ".\tools\repo_split_plan.ps1",
+  ".\tools\repo_split_copy.ps1",
+  ".\tools\repo_split_filter_repo.ps1",
+  ".\tools\repo_split_archive.ps1"
+)
+
+foreach ($script in $requiredScripts) {
+  if (-not (Test-Path $script)) {
+    throw "Missing required repo split helper script: $script"
+  }
+}
+```
 
 ## 9. Set Variables
 
@@ -246,6 +270,41 @@ Optional safety tag:
 ```powershell
 git tag pre-split-scratch
 ```
+
+### 10.1 Mandatory Operator Gate for Writes, Archive, and Push
+
+Any command that writes files, archives files, creates filtered clones, or pushes
+to a remote must be preceded by reviewed `-WhatIf` output when the script
+supports it.
+
+Use this confirmation gate before the first non-`-WhatIf` command in each phase:
+
+```powershell
+$approval = Read-Host "Type SPLIT-APPROVED after reviewing dry-run output and rollback plan"
+if ($approval -ne "SPLIT-APPROVED") {
+  throw "Operator confirmation missing; aborting split operation."
+}
+```
+
+Use this stricter gate immediately before any remote push:
+
+```powershell
+$approval = Read-Host "Type PUSH-APPROVED after inspecting target branch, remote, and rollback plan"
+if ($approval -ne "PUSH-APPROVED") {
+  throw "Push not approved; aborting."
+}
+```
+
+Rollback policy:
+
+- Before copy or archive operations, create a checkpoint commit or tag in
+  `scratch`.
+- Before `-Push`, inspect the filtered temporary clone and confirm that its root
+  payload, branch, and remote are correct.
+- If a pushed split is wrong, stop and use the target repository's revert or
+  protected-branch workflow. Do not force-push over published history.
+- `-ExcludedAction delete` is not part of the normal execution path. Use
+  `archive`; use `delete` only in a separate manually reviewed cleanup pass.
 
 ## 11. Clone Empty Destination Repositories
 
@@ -412,6 +471,10 @@ If either project depends on repo-root config from `scratch`, fix imports or con
 ```powershell
 git add .
 git commit -m "Initialize cognitive-lab from scratch and restore active CI"
+
+$approval = Read-Host "Type PUSH-APPROVED after verifying cognitive-lab CI and remote"
+if ($approval -ne "PUSH-APPROVED") { throw "Push not approved." }
+
 git push origin main
 ```
 
@@ -443,6 +506,10 @@ git filter-repo --path ea-aol/ --path-rename ea-aol/: --force
 git remote remove origin
 git remote add origin https://github.com/zerospawn01-coder/ea-aol.git
 git branch -M main
+
+$approval = Read-Host "Type PUSH-APPROVED after inspecting filtered ea-aol root and remote"
+if ($approval -ne "PUSH-APPROVED") { throw "Push not approved." }
+
 git push -u origin main
 ```
 
@@ -468,6 +535,10 @@ git filter-repo --path mtp_weaver/ --path-rename mtp_weaver/: --force
 git remote remove origin
 git remote add origin https://github.com/zerospawn01-coder/mtp-weaver.git
 git branch -M main
+
+$approval = Read-Host "Type PUSH-APPROVED after inspecting filtered mtp-weaver root and remote"
+if ($approval -ne "PUSH-APPROVED") { throw "Push not approved." }
+
 git push -u origin main
 ```
 
@@ -524,6 +595,10 @@ Experimental and proof-of-concept repository.
 ```powershell
 git add .
 git commit -m "Initialize lab-experiments from scratch"
+
+$approval = Read-Host "Type PUSH-APPROVED after verifying lab-experiments content and remote"
+if ($approval -ne "PUSH-APPROVED") { throw "Push not approved." }
+
 git push origin main
 ```
 
@@ -539,7 +614,11 @@ Use the archive helper after validating copy and filter-repo dry-runs.
 pwsh -File .\tools\repo_split_archive.ps1 -Layout recommended -WhatIf
 pwsh -File .\tools\repo_split_archive.ps1 -Layout minimal -WhatIf
 pwsh -File .\tools\repo_split_archive.ps1 -Layout recommended -ExcludedAction archive -WhatIf
-pwsh -File .\tools\repo_split_archive.ps1 -Layout recommended -ExcludedAction delete -WhatIf
+
+$approval = Read-Host "Type ARCHIVE-APPROVED after reviewing archive dry-run output"
+if ($approval -ne "ARCHIVE-APPROVED") { throw "Archive phase not approved." }
+
+pwsh -File .\tools\repo_split_archive.ps1 -Layout recommended -ExcludedAction archive
 ```
 
 Behavior:
@@ -547,9 +626,11 @@ Behavior:
 - `ReportFiles` from the plan are moved into `docs/reports/` or `docs/archive/` inside `scratch`
 - `ExcludedAction keep` leaves `antigravity_dashboard/`, `system_sentinel/`, and `tts_narrator/` untouched and only reports them
 - `ExcludedAction archive` moves those placeholder directories into `docs/excluded/`
-- `ExcludedAction delete` removes those placeholder directories after review
 
 Final split execution should normally use `-ExcludedAction archive`; `delete` is only for a later cleanup pass after manual review.
+
+If you use the manual fallback steps below instead of the archive helper, apply
+the same `ARCHIVE-APPROVED` gate before creating directories or moving files.
 
 ### 16.2 Create Archive Directories
 
@@ -610,6 +691,10 @@ Active work has moved to:
 ```powershell
 git add .
 git commit -m "Archive scratch after repository split"
+
+$approval = Read-Host "Type PUSH-APPROVED after verifying scratch archive state and remote"
+if ($approval -ne "PUSH-APPROVED") { throw "Push not approved." }
+
 git push origin main
 ```
 
@@ -748,7 +833,6 @@ Use the archive script to normalize report files under `docs/reports/` and `docs
 ```powershell
 pwsh -File .\tools\repo_split_archive.ps1 -Layout recommended -ExcludedAction archive -WhatIf
 pwsh -File .\tools\repo_split_archive.ps1 -Layout recommended -WhatIf
-pwsh -File .\tools\repo_split_archive.ps1 -Layout recommended -ExcludedAction delete -WhatIf
 ```
 
-Default behavior keeps excluded placeholders untouched and only reports them, but the standard execution policy is to rerun with `-ExcludedAction archive` once the split is ready.
+Default behavior keeps excluded placeholders untouched and only reports them, but the standard execution policy is to rerun with `-ExcludedAction archive` once the split is ready. `-ExcludedAction delete` is intentionally omitted from this quick reference; use it only in a separate cleanup review with its own rollback plan.
