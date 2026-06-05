@@ -244,6 +244,7 @@ jobs:
             git checkout -b "$BRANCH"
 
             # Record the caretaker intent: append to morning report ledger
+            mkdir -p "phase14/data/morning_reports"
             cat >> "phase14/data/morning_reports/caretaker_actions.jsonl" <<EOF
           {"ts":"$(date -u +%Y-%m-%dT%H:%M:%SZ)","cycle":"$CYCLE_DATE","branch":"$BRANCH","type":"$FINDING_TYPE","desc":"$DESC"}
           EOF
