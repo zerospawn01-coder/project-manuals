@@ -61,7 +61,16 @@ jobs:
             exit 0
           fi
 
-          # Check merge state — block on DIRTY (conflicts) or BLOCKED (missing reviews/checks)
+          # Check draft + merge state — skip drafts and block DIRTY (conflicts)
+          IS_DRAFT=$(gh pr view "$PR" --repo "$REPO" --json isDraft \
+            --jq .isDraft 2>/dev/null || echo "false")
+          if [ "$IS_DRAFT" = "true" ]; then
+            echo "PR is still a draft — skipping auto-merge"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # Check merge state — block on DIRTY (conflicts)
           MERGE_STATE=$(gh pr view "$PR" --repo "$REPO" --json mergeStateStatus \
             --jq .mergeStateStatus 2>/dev/null || echo "UNKNOWN")
           echo "PR #$PR merge state: $MERGE_STATE"
