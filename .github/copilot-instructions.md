@@ -94,6 +94,9 @@ use `github.token` for SELF scope and `CARETAKER_GH_TOKEN` for cross-repo scope.
 - For generated files, caches, `node_modules`, `dist`, `__pycache__`, local logs,
   and temporary clone directories, avoid committing them unless the repository
   already tracks the file intentionally.
+- For Copilot cloud-agent issue triage, prefer one tool call per turn until the
+  first external result is available; only parallelize after that. This keeps
+  the audit trail deterministic and avoids duplicate function-call collisions.
 - When changing workflow YAML, also validate that it parses with the local `yaml`
   package or equivalent.
 - When changing TypeScript, run `npm run build` before proposing the PR.
